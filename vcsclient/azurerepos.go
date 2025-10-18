@@ -407,7 +407,8 @@ func (client *AzureReposClient) getOpenPullRequests(ctx context.Context, owner, 
 	}
 	var pullRequestsInfo []PullRequestInfo
 	for _, pullRequest := range *pullRequests {
-		pullRequestDetails := parsePullRequestDetails(client, pullRequest, owner, repository, withBody)
+		// For list operations, we pass nil reviewers to avoid extra processing
+		pullRequestDetails := parsePullRequestDetails(client, pullRequest, owner, repository, withBody, nil)
 		pullRequestsInfo = append(pullRequestsInfo, pullRequestDetails)
 	}
 	return pullRequestsInfo, nil
@@ -427,7 +428,18 @@ func (client *AzureReposClient) GetPullRequestByID(ctx context.Context, owner, r
 	if err != nil {
 		return
 	}
-	pullRequestInfo = parsePullRequestDetails(client, *pullRequest, owner, repository, false)
+
+	// Extract reviewers from the pull request
+	var reviewers []string
+	if pullRequest.Reviewers != nil {
+		for _, reviewer := range *pullRequest.Reviewers {
+			if reviewer.DisplayName != nil && *reviewer.DisplayName != "" {
+				reviewers = append(reviewers, *reviewer.DisplayName)
+			}
+		}
+	}
+
+	pullRequestInfo = parsePullRequestDetails(client, *pullRequest, owner, repository, false, reviewers)
 	return
 }
 
@@ -699,6 +711,17 @@ func (client *AzureReposClient) GetRepositoryEnvironmentInfo(ctx context.Context
 	return RepositoryEnvironmentInfo{}, getUnsupportedInAzureError("get repository environment info")
 }
 
+func (client *AzureReposClient) GetUserAvatar(ctx context.Context, username string) (string, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return "", err
+	}
+
+	// Azure DevOps avatar URLs require the user descriptor which needs additional API call
+	// A full implementation would require calling the Graph API to get user descriptor
+	return "", getUnsupportedInAzureError("get user avatar - requires Graph API integration")
+}
+
 func (client *AzureReposClient) GetModifiedFiles(ctx context.Context, _, repository, refBefore, refAfter string) ([]string, error) {
 	if err := validateParametersNotBlank(map[string]string{
 		"repository": repository,
@@ -809,7 +832,7 @@ func (client *AzureReposClient) UploadSnapshotToDependencyGraph(ctx context.Cont
 	return getUnsupportedInAzureError("uploading snapshot to dependency graph UI")
 }
 
-func parsePullRequestDetails(client *AzureReposClient, pullRequest git.GitPullRequest, owner, repository string, withBody bool) PullRequestInfo {
+func parsePullRequestDetails(client *AzureReposClient, pullRequest git.GitPullRequest, owner, repository string, withBody bool, reviewers []string) PullRequestInfo {
 	// Trim the branches prefix and get the actual branches name
 	shortSourceName := plumbing.ReferenceName(*pullRequest.SourceRefName).Short()
 	shortTargetName := plumbing.ReferenceName(*pullRequest.TargetRefName).Short()
@@ -828,11 +851,12 @@ func parsePullRequestDetails(client *AzureReposClient, pullRequest git.GitPullRe
 		}
 	}
 	return PullRequestInfo{
-		ID:     int64(*pullRequest.PullRequestId),
-		Title:  vcsutils.DefaultIfNotNil(pullRequest.Title),
-		Body:   prBody,
-		URL:    vcsutils.DefaultIfNotNil(pullRequest.Url),
-		Author: vcsutils.DefaultIfNotNil(pullRequest.CreatedBy.DisplayName),
+		ID:        int64(*pullRequest.PullRequestId),
+		Title:     vcsutils.DefaultIfNotNil(pullRequest.Title),
+		Body:      prBody,
+		URL:       vcsutils.DefaultIfNotNil(pullRequest.Url),
+		Author:    vcsutils.DefaultIfNotNil(pullRequest.CreatedBy.DisplayName),
+		Reviewers: reviewers,
 		Source: BranchInfo{
 			Name:       shortSourceName,
 			Repository: repository,

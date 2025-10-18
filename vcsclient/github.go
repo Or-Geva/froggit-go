@@ -445,10 +445,37 @@ func (client *GitHubClient) GetPullRequestByID(ctx context.Context, owner, repos
 		return PullRequestInfo{}, err
 	}
 
-	return mapGitHubPullRequestToPullRequestInfo(pullRequest, false)
+	// Fetch reviewers
+	var reviewers []string
+	var reviews []*github.PullRequestReview
+	err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+		reviews, ghResponse, err = client.ghClient.PullRequests.ListReviews(ctx, owner, repository, pullRequestId, nil)
+		return ghResponse, err
+	})
+	if err == nil {
+		// Extract unique reviewers
+		reviewerSet := make(map[string]bool)
+		for _, review := range reviews {
+			if review.User != nil && review.User.Login != nil {
+				reviewerSet[*review.User.Login] = true
+			}
+		}
+		for reviewer := range reviewerSet {
+			reviewers = append(reviewers, reviewer)
+		}
+	}
+
+	// Also add requested reviewers who haven't reviewed yet
+	for _, user := range pullRequest.RequestedReviewers {
+		if user.Login != nil {
+			reviewers = append(reviewers, *user.Login)
+		}
+	}
+
+	return mapGitHubPullRequestToPullRequestInfo(pullRequest, false, reviewers)
 }
 
-func mapGitHubPullRequestToPullRequestInfo(ghPullRequest *github.PullRequest, withBody bool) (PullRequestInfo, error) {
+func mapGitHubPullRequestToPullRequestInfo(ghPullRequest *github.PullRequest, withBody bool, reviewers []string) (PullRequestInfo, error) {
 	var sourceBranch, targetBranch string
 	var err1, err2 error
 	if ghPullRequest != nil && ghPullRequest.Head != nil && ghPullRequest.Base != nil {
@@ -486,11 +513,12 @@ func mapGitHubPullRequestToPullRequestInfo(ghPullRequest *github.PullRequest, wi
 	}
 
 	return PullRequestInfo{
-		ID:     int64(vcsutils.DefaultIfNotNil(ghPullRequest.Number)),
-		Title:  vcsutils.DefaultIfNotNil(ghPullRequest.Title),
-		URL:    vcsutils.DefaultIfNotNil(ghPullRequest.HTMLURL),
-		Body:   body,
-		Author: vcsutils.DefaultIfNotNil(ghPullRequest.User.Login),
+		ID:        int64(vcsutils.DefaultIfNotNil(ghPullRequest.Number)),
+		Title:     vcsutils.DefaultIfNotNil(ghPullRequest.Title),
+		URL:       vcsutils.DefaultIfNotNil(ghPullRequest.HTMLURL),
+		Body:      body,
+		Author:    vcsutils.DefaultIfNotNil(ghPullRequest.User.Login),
+		Reviewers: reviewers,
 		Source: BranchInfo{
 			Name:       sourceBranch,
 			Repository: sourceRepoName,
@@ -1064,6 +1092,33 @@ func (client *GitHubClient) GetRepositoryEnvironmentInfo(ctx context.Context, ow
 	return *repositoryEnvInfo, err
 }
 
+func (client *GitHubClient) GetUserAvatar(ctx context.Context, username string) (string, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return "", err
+	}
+
+	var user *github.User
+	var ghResponse *github.Response
+	err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+		user, ghResponse, err = client.ghClient.Users.Get(ctx, username)
+		return ghResponse, err
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if err = vcsutils.CheckResponseStatusWithBody(ghResponse.Response, http.StatusOK); err != nil {
+		return "", err
+	}
+
+	if user.AvatarURL != nil {
+		return *user.AvatarURL, nil
+	}
+
+	return "", nil
+}
+
 func (client *GitHubClient) CreateBranch(ctx context.Context, owner, repository, sourceBranch, newBranch string) error {
 	err := validateParametersNotBlank(map[string]string{"owner": owner, "repository": repository, "sourceBranch": sourceBranch, "newBranch": newBranch})
 	if err != nil {
@@ -1593,7 +1648,8 @@ func mapGitHubIssuesCommentToCommentInfoList(commentsList []*github.IssueComment
 func mapGitHubPullRequestToPullRequestInfoList(pullRequestList []*github.PullRequest, withBody bool) (res []PullRequestInfo, err error) {
 	var mappedPullRequest PullRequestInfo
 	for _, pullRequest := range pullRequestList {
-		mappedPullRequest, err = mapGitHubPullRequestToPullRequestInfo(pullRequest, withBody)
+		// For list operations, we pass nil reviewers to avoid extra API calls
+		mappedPullRequest, err = mapGitHubPullRequestToPullRequestInfo(pullRequest, withBody, nil)
 		if err != nil {
 			return
 		}

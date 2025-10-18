@@ -354,6 +354,10 @@ type VcsClient interface {
 	// name          - The environment name
 	GetRepositoryEnvironmentInfo(ctx context.Context, owner, repository, name string) (RepositoryEnvironmentInfo, error)
 
+	// GetUserAvatar Gets the avatar URL for a user
+	// username      - The username to get the avatar for
+	GetUserAvatar(ctx context.Context, username string) (string, error)
+
 	// GetModifiedFiles returns list of file names modified between two VCS references
 	// owner         - User or organization
 	// repository    - VCS repository name
@@ -470,14 +474,15 @@ type CommentInfo struct {
 }
 
 type PullRequestInfo struct {
-	ID     int64
-	Title  string
-	Body   string
-	URL    string
-	Author string
-	Source BranchInfo
-	Target BranchInfo
-	Status string
+	ID        int64
+	Title     string
+	Body      string
+	URL       string
+	Author    string
+	Reviewers []string
+	Source    BranchInfo
+	Target    BranchInfo
+	Status    string
 }
 
 type PullRequestReviewDetails struct {

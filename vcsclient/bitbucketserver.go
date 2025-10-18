@@ -365,7 +365,8 @@ func (client *BitbucketServerClient) getOpenPullRequests(ctx context.Context, ow
 		for _, pullRequest := range pullRequests {
 			if pullRequest.Open {
 				var pullRequestInfo PullRequestInfo
-				if pullRequestInfo, err = mapBitbucketServerPullRequestToPullRequestInfo(pullRequest, withBody, owner); err != nil {
+				// For list operations, we pass nil reviewers to avoid extra processing
+				if pullRequestInfo, err = mapBitbucketServerPullRequestToPullRequestInfo(pullRequest, withBody, owner, nil); err != nil {
 					return nil, err
 				}
 				results = append(results, pullRequestInfo)
@@ -392,11 +393,22 @@ func (client *BitbucketServerClient) GetPullRequestByID(ctx context.Context, own
 	if err != nil {
 		return
 	}
-	pullRequestInfo, err = mapBitbucketServerPullRequestToPullRequestInfo(pullRequest, false, owner)
+
+	// Extract reviewers from the pull request object
+	var reviewers []string
+	if pullRequest.Reviewers != nil {
+		for _, reviewer := range pullRequest.Reviewers {
+			if reviewer.User.Name != "" {
+				reviewers = append(reviewers, reviewer.User.Name)
+			}
+		}
+	}
+
+	pullRequestInfo, err = mapBitbucketServerPullRequestToPullRequestInfo(pullRequest, false, owner, reviewers)
 	return
 }
 
-func mapBitbucketServerPullRequestToPullRequestInfo(pullRequest bitbucketv1.PullRequest, withBody bool, owner string) (PullRequestInfo, error) {
+func mapBitbucketServerPullRequestToPullRequestInfo(pullRequest bitbucketv1.PullRequest, withBody bool, owner string, reviewers []string) (PullRequestInfo, error) {
 	sourceOwner, err := getSourceRepositoryOwner(pullRequest)
 	if err != nil {
 		return PullRequestInfo{}, err
@@ -406,13 +418,14 @@ func mapBitbucketServerPullRequestToPullRequestInfo(pullRequest bitbucketv1.Pull
 		body = pullRequest.Description
 	}
 	return PullRequestInfo{
-		ID:     int64(pullRequest.ID),
-		Title:  pullRequest.Title,
-		Author: pullRequest.Author.User.Name,
-		Source: BranchInfo{Name: pullRequest.FromRef.DisplayID, Repository: pullRequest.ToRef.Repository.Slug, Owner: sourceOwner},
-		Target: BranchInfo{Name: pullRequest.ToRef.DisplayID, Repository: pullRequest.ToRef.Repository.Slug, Owner: owner},
-		Body:   body,
-		URL:    pullRequest.Links.Self[0].Href,
+		ID:        int64(pullRequest.ID),
+		Title:     pullRequest.Title,
+		Author:    pullRequest.Author.User.Name,
+		Reviewers: reviewers,
+		Source:    BranchInfo{Name: pullRequest.FromRef.DisplayID, Repository: pullRequest.ToRef.Repository.Slug, Owner: sourceOwner},
+		Target:    BranchInfo{Name: pullRequest.ToRef.DisplayID, Repository: pullRequest.ToRef.Repository.Slug, Owner: owner},
+		Body:      body,
+		URL:       pullRequest.Links.Self[0].Href,
 	}, nil
 }
 
@@ -729,6 +742,24 @@ func (client *BitbucketServerClient) UnlabelPullRequest(ctx context.Context, own
 // GetRepositoryEnvironmentInfo on Bitbucket server
 func (client *BitbucketServerClient) GetRepositoryEnvironmentInfo(ctx context.Context, owner, repository, name string) (RepositoryEnvironmentInfo, error) {
 	return RepositoryEnvironmentInfo{}, errBitbucketGetRepoEnvironmentInfoNotSupported
+}
+
+func (client *BitbucketServerClient) GetUserAvatar(ctx context.Context, username string) (string, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return "", err
+	}
+
+	// Construct avatar URL for Bitbucket Server
+	// Avatar URL is typically at {baseURL}/users/{username}/avatar.png
+	if client.vcsInfo.APIEndpoint != "" {
+		// Remove /rest/api/1.0 suffix if present
+		baseURL := strings.TrimSuffix(client.vcsInfo.APIEndpoint, "/rest/api/1.0")
+		baseURL = strings.TrimSuffix(baseURL, "/")
+		return baseURL + "/users/" + username + "/avatar.png", nil
+	}
+
+	return "", nil
 }
 
 // Get all projects for which the authenticated user has the PROJECT_VIEW permission

@@ -385,10 +385,14 @@ func (client *BitbucketCloudClient) GetPullRequestByID(ctx context.Context, owne
 	sourceOwner, sourceRepository := splitBitbucketCloudRepoName(pullRequestDetails.Source.Repository.Name)
 	targetOwner, targetRepository := splitBitbucketCloudRepoName(pullRequestDetails.Target.Repository.Name)
 
+	// Note: Bitbucket Cloud API doesn't provide reviewers in the basic pull request response
+	// Reviewers would need to be fetched separately if needed
+
 	pullRequestInfo = PullRequestInfo{
-		ID:     pullRequestDetails.ID,
-		Title:  pullRequestDetails.Title,
-		Author: pullRequestDetails.Author.DisplayName,
+		ID:        pullRequestDetails.ID,
+		Title:     pullRequestDetails.Title,
+		Author:    pullRequestDetails.Author.DisplayName,
+		Reviewers: nil,
 		Source: BranchInfo{
 			Name:       pullRequestDetails.Source.Name.Str,
 			Repository: sourceRepository,
@@ -647,6 +651,39 @@ func (client *BitbucketCloudClient) DownloadFileFromRepo(ctx context.Context, ow
 // GetRepositoryEnvironmentInfo on Bitbucket cloud
 func (client *BitbucketCloudClient) GetRepositoryEnvironmentInfo(ctx context.Context, owner, repository, name string) (RepositoryEnvironmentInfo, error) {
 	return RepositoryEnvironmentInfo{}, errBitbucketGetRepoEnvironmentInfoNotSupported
+}
+
+func (client *BitbucketCloudClient) GetUserAvatar(ctx context.Context, username string) (string, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return "", err
+	}
+
+	bitbucketClient := client.buildBitbucketCloudClient(ctx)
+	userRaw, err := bitbucketClient.Users.Get(username)
+	if err != nil {
+		return "", err
+	}
+
+	// Extract avatar URL from the user object
+	type userResponse struct {
+		Links struct {
+			Avatar struct {
+				Href string `json:"href"`
+			} `json:"avatar"`
+		} `json:"links"`
+	}
+
+	user, err := vcsutils.RemapFields[userResponse](userRaw, "json")
+	if err != nil {
+		return "", err
+	}
+
+	if user.Links.Avatar.Href != "" {
+		return user.Links.Avatar.Href, nil
+	}
+
+	return "", nil
 }
 
 func (client *BitbucketCloudClient) GetModifiedFiles(ctx context.Context, owner, repository, refBefore, refAfter string) ([]string, error) {

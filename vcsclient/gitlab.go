@@ -304,7 +304,27 @@ func (client *GitLabClient) GetPullRequestByID(_ context.Context, owner, reposit
 			return PullRequestInfo{}, err
 		}
 	}
-	pullRequestInfo, err = client.mapGitLabMergeRequestToPullRequestInfo(mergeRequest, false, owner, repository)
+
+	// Fetch reviewers from merge request participants
+	var reviewers []string
+	reviewerSet := make(map[string]bool)
+
+	// Get reviewers from notes (comments) - users who have interacted with the MR
+	prNotes, _, notesErr := client.glClient.Notes.ListMergeRequestNotes(owner+"/"+repository, pullRequestId, nil)
+	if notesErr == nil {
+		for _, note := range prNotes {
+			if note.Author.Username != "" {
+				reviewerSet[note.Author.Username] = true
+			}
+		}
+	}
+
+	// Convert set to slice
+	for reviewer := range reviewerSet {
+		reviewers = append(reviewers, reviewer)
+	}
+
+	pullRequestInfo, err = client.mapGitLabMergeRequestToPullRequestInfo(mergeRequest, false, owner, repository, reviewers)
 	return
 }
 
@@ -692,6 +712,30 @@ func (client *GitLabClient) GetRepositoryEnvironmentInfo(_ context.Context, _, _
 	return RepositoryEnvironmentInfo{}, errGitLabGetRepoEnvironmentInfoNotSupported
 }
 
+func (client *GitLabClient) GetUserAvatar(ctx context.Context, username string) (string, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return "", err
+	}
+
+	users, glResponse, err := client.glClient.Users.ListUsers(&gitlab.ListUsersOptions{Username: &username})
+	if err != nil {
+		return "", err
+	}
+
+	if glResponse != nil {
+		if err = vcsutils.CheckResponseStatusWithBody(glResponse.Response, http.StatusOK); err != nil {
+			return "", err
+		}
+	}
+
+	if len(users) > 0 && users[0].AvatarURL != "" {
+		return users[0].AvatarURL, nil
+	}
+
+	return "", nil
+}
+
 // DownloadFileFromRepo on GitLab
 func (client *GitLabClient) DownloadFileFromRepo(_ context.Context, owner, repository, branch, path string) ([]byte, int, error) {
 	file, glResponse, err := client.glClient.RepositoryFiles.GetFile(getProjectID(owner, repository), path, &gitlab.GetFileOptions{Ref: &branch})
@@ -900,7 +944,8 @@ func mapGitLabNotesToCommentInfoList(notes []*gitlab.Note, discussionId string) 
 func (client *GitLabClient) mapGitLabMergeRequestToPullRequestInfoList(mergeRequests []*gitlab.MergeRequest, owner, repository string, withBody bool) (res []PullRequestInfo, err error) {
 	for _, mergeRequest := range mergeRequests {
 		var mergeRequestInfo PullRequestInfo
-		if mergeRequestInfo, err = client.mapGitLabMergeRequestToPullRequestInfo(mergeRequest, withBody, owner, repository); err != nil {
+		// For list operations, we pass nil reviewers to avoid extra API calls
+		if mergeRequestInfo, err = client.mapGitLabMergeRequestToPullRequestInfo(mergeRequest, withBody, owner, repository, nil); err != nil {
 			return
 		}
 		res = append(res, mergeRequestInfo)
@@ -908,7 +953,7 @@ func (client *GitLabClient) mapGitLabMergeRequestToPullRequestInfoList(mergeRequ
 	return
 }
 
-func (client *GitLabClient) mapGitLabMergeRequestToPullRequestInfo(mergeRequest *gitlab.MergeRequest, withBody bool, owner, repository string) (PullRequestInfo, error) {
+func (client *GitLabClient) mapGitLabMergeRequestToPullRequestInfo(mergeRequest *gitlab.MergeRequest, withBody bool, owner, repository string, reviewers []string) (PullRequestInfo, error) {
 	var body string
 	if withBody {
 		body = mergeRequest.Description
@@ -922,10 +967,11 @@ func (client *GitLabClient) mapGitLabMergeRequestToPullRequestInfo(mergeRequest 
 	}
 
 	return PullRequestInfo{
-		ID:     int64(mergeRequest.IID),
-		Title:  mergeRequest.Title,
-		Body:   body,
-		Author: mergeRequest.Author.Username,
+		ID:        int64(mergeRequest.IID),
+		Title:     mergeRequest.Title,
+		Body:      body,
+		Author:    mergeRequest.Author.Username,
+		Reviewers: reviewers,
 		Source: BranchInfo{
 			Name:       mergeRequest.SourceBranch,
 			Repository: repository,
