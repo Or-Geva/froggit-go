@@ -266,6 +266,16 @@ type VcsClient interface {
 	// pullRequestId  - ID of the pull request
 	GetPullRequestByID(ctx context.Context, owner, repository string, pullRequestId int) (PullRequestInfo, error)
 
+	// ListPullRequestsByUser Gets all pull requests created by a specific user across all repositories.
+	// username       - Username to filter by
+	// Note: Currently only implemented for GitHub
+	ListPullRequestsByUser(ctx context.Context, username string) ([]PullRequestInfo, error)
+
+	// ListPullRequestsByReviewer Gets all pull requests where the specified user is requested as a reviewer across all repositories.
+	// username       - Username to filter by
+	// Note: Currently only implemented for GitHub
+	ListPullRequestsByReviewer(ctx context.Context, username string) ([]PullRequestInfo, error)
+
 	// GetLatestCommit Gets the most recent commit of a branch
 	// owner      - User or organization
 	// repository - VCS repository name
@@ -361,6 +371,12 @@ type VcsClient interface {
 	// refAfter      - A VCS reference: commit SHA, branch name, tag name
 	GetModifiedFiles(ctx context.Context, owner, repository, refBefore, refAfter string) ([]string, error)
 
+	// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+	// owner         - User or organization
+	// repository    - VCS repository name
+	// pullRequestID - Pull request ID
+	GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error)
+
 	// GetPullRequestCommentSizeLimit returns the maximum size of a pull request comment
 	GetPullRequestCommentSizeLimit() int
 
@@ -396,6 +412,13 @@ type VcsClient interface {
 
 	// UploadSnapshotToDependencyGraph uploads a snapshot to the GitHub dependency graph tab
 	UploadSnapshotToDependencyGraph(ctx context.Context, owner, repo string, snapshot *SbomSnapshot) error
+
+	// GetCurrentUser Gets the currently authenticated user information
+	GetCurrentUser(ctx context.Context) (UserInfo, error)
+
+	// GetUser Gets user information by username
+	// username - The username to fetch information for
+	GetUser(ctx context.Context, username string) (UserInfo, error)
 }
 
 // SbomSnapshot represents a snapshot for GitHub dependency submission API
@@ -461,6 +484,20 @@ type CommitInfo struct {
 	AuthorEmail string
 }
 
+// UserInfo contains information about a user
+type UserInfo struct {
+	// Login is the username
+	Login string
+	// ID is the unique identifier of the user
+	ID int64
+	// Name is the display name of the user
+	Name string
+	// Email is the email address of the user
+	Email string
+	// AvatarURL is the URL to the user's avatar
+	AvatarURL string
+}
+
 type CommentInfo struct {
 	ID       int64
 	ThreadID string
@@ -470,14 +507,15 @@ type CommentInfo struct {
 }
 
 type PullRequestInfo struct {
-	ID     int64
-	Title  string
-	Body   string
-	URL    string
-	Author string
-	Source BranchInfo
-	Target BranchInfo
-	Status string
+	Number    int
+	Title     string
+	Body      string
+	URL       string
+	Author    string
+	Reviewers []string
+	Source    BranchInfo
+	Target    BranchInfo
+	Status    string
 }
 
 type PullRequestReviewDetails struct {
@@ -487,6 +525,20 @@ type PullRequestReviewDetails struct {
 	SubmittedAt string
 	CommitID    string
 	State       string
+	Comments    []ReviewCommentDetails
+}
+
+// ReviewCommentDetails contains information about an inline review comment with its diff context
+type ReviewCommentDetails struct {
+	ID        int64
+	Body      string
+	DiffHunk  string
+	Path      string
+	Line      int
+	StartLine int
+	Side      string
+	CreatedAt time.Time
+	Outdated  bool // Whether the comment is outdated/resolved
 }
 
 type BranchInfo struct {
@@ -567,6 +619,24 @@ type ListOptions struct {
 type FileToCommit struct {
 	Path    string
 	Content string
+}
+
+// FileChange represents detailed information about a changed file in a comparison or pull request
+type FileChange struct {
+	// Filename is the current name of the file
+	Filename string
+	// PreviousFilename is the previous name if the file was renamed
+	PreviousFilename string
+	// Status indicates the type of change: "added", "modified", "removed", "renamed"
+	Status string
+	// Additions is the number of lines added
+	Additions int
+	// Deletions is the number of lines deleted
+	Deletions int
+	// Changes is the total number of changes
+	Changes int
+	// Patch contains the actual diff content in unified diff format
+	Patch string
 }
 
 func validateParametersNotBlank(paramNameValueMap map[string]string) error {

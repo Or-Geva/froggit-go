@@ -288,20 +288,90 @@ func (client *AzureReposClient) ListPullRequestReviews(ctx context.Context, owne
 		return nil, err
 	}
 
+	// Fetch all comment threads for the pull request
+	threads, err := azureReposGitClient.GetThreads(ctx, git.GetThreadsArgs{
+		RepositoryId:  &repository,
+		PullRequestId: &pullRequestID,
+		Project:       &client.vcsInfo.Project,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Group threads by author (reviewer)
+	threadsByAuthor := make(map[string][]git.GitPullRequestCommentThread)
+	for _, thread := range *threads {
+		if thread.IsDeleted != nil && *thread.IsDeleted {
+			continue
+		}
+		if thread.Comments != nil && len(*thread.Comments) > 0 {
+			firstComment := (*thread.Comments)[0]
+			if firstComment.Author != nil && firstComment.Author.DisplayName != nil {
+				authorName := *firstComment.Author.DisplayName
+				threadsByAuthor[authorName] = append(threadsByAuthor[authorName], thread)
+			}
+		}
+	}
+
 	var reviews []PullRequestReviewDetails
 	for _, reviewer := range *reviewers {
 		id, err := strconv.ParseInt(*reviewer.Id, 10, 64)
 		if err != nil {
 			return nil, err
 		}
-		reviews = append(reviews, PullRequestReviewDetails{
+		reviewDetails := PullRequestReviewDetails{
 			ID:       id,
 			Reviewer: *reviewer.DisplayName,
 			State:    mapVoteToState(*reviewer.Vote),
-		})
+		}
+
+		// Add associated comment threads with diff context
+		if authorThreads, ok := threadsByAuthor[*reviewer.DisplayName]; ok {
+			for _, thread := range authorThreads {
+				if thread.ThreadContext != nil && thread.ThreadContext.FilePath != nil {
+					// Extract the first comment in the thread for the review comment
+					if thread.Comments != nil && len(*thread.Comments) > 0 {
+						comment := (*thread.Comments)[0]
+						reviewCommentDetail := ReviewCommentDetails{
+							ID:        int64(*comment.Id),
+							Body:      getStringValue(comment.Content),
+							DiffHunk:  "", // Azure Repos doesn't provide diff hunk text in the API
+							Path:      getStringValue(thread.ThreadContext.FilePath),
+							CreatedAt: comment.PublishedDate.Time,
+						}
+
+						// Use right file (new file) position if available, otherwise left file (old file)
+						if thread.ThreadContext.RightFileStart != nil && thread.ThreadContext.RightFileStart.Line != nil {
+							reviewCommentDetail.Line = *thread.ThreadContext.RightFileStart.Line
+							reviewCommentDetail.Side = "RIGHT"
+							if thread.ThreadContext.RightFileEnd != nil && thread.ThreadContext.RightFileEnd.Line != nil {
+								reviewCommentDetail.StartLine = *thread.ThreadContext.RightFileStart.Line
+							}
+						} else if thread.ThreadContext.LeftFileStart != nil && thread.ThreadContext.LeftFileStart.Line != nil {
+							reviewCommentDetail.Line = *thread.ThreadContext.LeftFileStart.Line
+							reviewCommentDetail.Side = "LEFT"
+							if thread.ThreadContext.LeftFileEnd != nil && thread.ThreadContext.LeftFileEnd.Line != nil {
+								reviewCommentDetail.StartLine = *thread.ThreadContext.LeftFileStart.Line
+							}
+						}
+
+						reviewDetails.Comments = append(reviewDetails.Comments, reviewCommentDetail)
+					}
+				}
+			}
+		}
+
+		reviews = append(reviews, reviewDetails)
 	}
 
 	return reviews, nil
+}
+
+func getStringValue(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func (client *AzureReposClient) ListPullRequestsAssociatedWithCommit(ctx context.Context, owner, repository string, commitSHA string) ([]PullRequestInfo, error) {
@@ -429,6 +499,16 @@ func (client *AzureReposClient) GetPullRequestByID(ctx context.Context, owner, r
 	}
 	pullRequestInfo = parsePullRequestDetails(client, *pullRequest, owner, repository, false)
 	return
+}
+
+// ListPullRequestsByUser on Azure Repos
+func (client *AzureReposClient) ListPullRequestsByUser(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByUser is not implemented for Azure Repos")
+}
+
+// ListPullRequestsByReviewer on Azure Repos
+func (client *AzureReposClient) ListPullRequestsByReviewer(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByReviewer is not implemented for Azure Repos")
 }
 
 // GetLatestCommit on Azure Repos
@@ -765,6 +845,105 @@ func (client *AzureReposClient) GetModifiedFiles(ctx context.Context, _, reposit
 	return fileNamesList, nil
 }
 
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *AzureReposClient) GetPullRequestDiff(ctx context.Context, _, repository string, pullRequestID int) ([]FileChange, error) {
+	if err := validateParametersNotBlank(map[string]string{
+		"repository": repository,
+	}); err != nil {
+		return nil, err
+	}
+
+	azureReposGitClient, err := client.buildAzureReposClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the pull request to obtain the last merge source and target commits
+	pr, err := azureReposGitClient.GetPullRequest(ctx, git.GetPullRequestArgs{
+		PullRequestId: &pullRequestID,
+		Project:       &client.vcsInfo.Project,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the commit diffs for the pull request
+	var fileChanges []FileChange
+	changesToReturn := vcsutils.PointerOf(100)
+	changesToSkip := vcsutils.PointerOf(0)
+
+	for *changesToReturn >= 0 {
+		commitDiffs, err := azureReposGitClient.GetCommitDiffs(ctx, git.GetCommitDiffsArgs{
+			Top:          changesToReturn,
+			Skip:         changesToSkip,
+			RepositoryId: &repository,
+			Project:      &client.vcsInfo.Project,
+			BaseVersionDescriptor: &git.GitBaseVersionDescriptor{
+				BaseVersion: pr.LastMergeTargetCommit.CommitId,
+			},
+			TargetVersionDescriptor: &git.GitTargetVersionDescriptor{
+				TargetVersion: pr.LastMergeSourceCommit.CommitId,
+			},
+			DiffCommonCommit: vcsutils.PointerOf(true),
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		changes := vcsutils.DefaultIfNotNil(commitDiffs.Changes)
+		if len(changes) < *changesToReturn {
+			changesToReturn = vcsutils.PointerOf(-1)
+		} else {
+			changesToSkip = vcsutils.PointerOf(*changesToSkip + *changesToReturn)
+		}
+
+		for _, anyChange := range changes {
+			change, err := vcsutils.RemapFields[git.GitChange](anyChange, "json")
+			if err != nil {
+				return nil, err
+			}
+
+			changedItem, err := vcsutils.RemapFields[git.GitItem](change.Item, "json")
+			if err != nil {
+				return nil, err
+			}
+
+			if vcsutils.DefaultIfNotNil(changedItem.GitObjectType) != git.GitObjectTypeValues.Blob {
+				// We are not interested in folders (trees) and other Git types
+				continue
+			}
+
+			fileChange := FileChange{
+				Filename:         strings.TrimPrefix(vcsutils.DefaultIfNotNil(changedItem.Path), "/"),
+				PreviousFilename: "",
+				Additions:        0, // Azure DevOps API doesn't easily provide line-level stats
+				Deletions:        0,
+				Changes:          0,
+				Patch:            "", // Patch content not easily available in this response
+			}
+
+			// Determine status based on change type
+			changeType := vcsutils.DefaultIfNotNil(change.ChangeType)
+			switch changeType {
+			case git.VersionControlChangeTypeValues.Add:
+				fileChange.Status = "added"
+			case git.VersionControlChangeTypeValues.Delete:
+				fileChange.Status = "removed"
+			case git.VersionControlChangeTypeValues.Rename:
+				fileChange.Status = "renamed"
+			case git.VersionControlChangeTypeValues.Edit:
+				fileChange.Status = "modified"
+			default:
+				fileChange.Status = "modified"
+			}
+
+			fileChanges = append(fileChanges, fileChange)
+		}
+	}
+
+	return fileChanges, nil
+}
+
 func (client *AzureReposClient) CreateBranch(ctx context.Context, owner, repository, sourceBranch, newBranch string) error {
 	return getUnsupportedInAzureError("create branch")
 }
@@ -828,7 +1007,7 @@ func parsePullRequestDetails(client *AzureReposClient, pullRequest git.GitPullRe
 		}
 	}
 	return PullRequestInfo{
-		ID:     int64(*pullRequest.PullRequestId),
+		Number: *pullRequest.PullRequestId,
 		Title:  vcsutils.DefaultIfNotNil(pullRequest.Title),
 		Body:   prBody,
 		URL:    vcsutils.DefaultIfNotNil(pullRequest.Url),
@@ -901,4 +1080,14 @@ func mapVoteToState(vote int) string {
 	default:
 		return "UNKNOWN"
 	}
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *AzureReposClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetCurrentUser is not currently supported for Azure Repos")
+}
+
+// GetUser Gets user information by username on Azure Repos
+func (client *AzureReposClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetUser is not currently supported for Azure Repos")
 }

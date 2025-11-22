@@ -396,6 +396,16 @@ func (client *BitbucketServerClient) GetPullRequestByID(ctx context.Context, own
 	return
 }
 
+// ListPullRequestsByUser on Bitbucket Server
+func (client *BitbucketServerClient) ListPullRequestsByUser(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByUser is not implemented for Bitbucket Server")
+}
+
+// ListPullRequestsByReviewer on Bitbucket Server
+func (client *BitbucketServerClient) ListPullRequestsByReviewer(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByReviewer is not implemented for Bitbucket Server")
+}
+
 func mapBitbucketServerPullRequestToPullRequestInfo(pullRequest bitbucketv1.PullRequest, withBody bool, owner string) (PullRequestInfo, error) {
 	sourceOwner, err := getSourceRepositoryOwner(pullRequest)
 	if err != nil {
@@ -406,7 +416,7 @@ func mapBitbucketServerPullRequestToPullRequestInfo(pullRequest bitbucketv1.Pull
 		body = pullRequest.Description
 	}
 	return PullRequestInfo{
-		ID:     int64(pullRequest.ID),
+		Number: pullRequest.ID,
 		Title:  pullRequest.Title,
 		Author: pullRequest.Author.User.Name,
 		Source: BranchInfo{Name: pullRequest.FromRef.DisplayID, Repository: pullRequest.ToRef.Repository.Slug, Owner: sourceOwner},
@@ -895,6 +905,73 @@ func (client *BitbucketServerClient) GetModifiedFiles(ctx context.Context, owner
 	return fileNamesList, nil
 }
 
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *BitbucketServerClient) GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error) {
+	err := validateParametersNotBlank(map[string]string{
+		"owner":      owner,
+		"repository": repository,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	bitbucketClient := client.buildBitbucketClient(ctx)
+
+	// Get the pull request to obtain the source and target commits
+	pr, err := bitbucketClient.GetPullRequest(owner, repository, pullRequestID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the diff for the pull request
+	prInfo, err := bitbucketv1.GetPullRequestResponse(pr)
+	if err != nil {
+		return nil, err
+	}
+
+	refBefore := prInfo.ToRef.LatestCommit
+	refAfter := prInfo.FromRef.LatestCommit
+
+	// Use the diff API to get detailed file changes
+	params := map[string]interface{}{"from": refAfter, "to": refBefore}
+	resp, err := bitbucketClient.StreamDiff_37(owner, repository, "", params)
+	if err != nil {
+		return nil, err
+	}
+
+	dst, err := vcsutils.RemapFields[diffPayload](resp.Values, "")
+	if err != nil {
+		return nil, err
+	}
+
+	var fileChanges []FileChange
+	for _, diff := range dst.Diffs {
+		fileChange := FileChange{
+			Filename:         diff.Destination.ToString,
+			PreviousFilename: diff.Source.ToString,
+			Additions:        0, // Bitbucket Server API doesn't easily provide line stats
+			Deletions:        0,
+			Changes:          0,
+			Patch:            "", // Full patch not easily available in this response
+		}
+
+		// Determine status based on the diff type
+		if diff.Source.ToString == "" {
+			fileChange.Status = "added"
+		} else if diff.Destination.ToString == "" {
+			fileChange.Status = "removed"
+		} else if diff.Source.ToString != diff.Destination.ToString {
+			fileChange.Status = "renamed"
+		} else {
+			fileChange.Status = "modified"
+		}
+
+		fileChanges = append(fileChanges, fileChange)
+	}
+
+	return fileChanges, nil
+}
+
 func (client *BitbucketServerClient) CreateBranch(ctx context.Context, owner, repository, sourceBranch, newBranch string) error {
 	return errBitbucketCreateBranchNotSupported
 }
@@ -952,4 +1029,14 @@ func getSourceRepositoryOwner(pullRequest bitbucketv1.PullRequest) (string, erro
 		return "", fmt.Errorf("failed to get source repository owner, project is nil. (PR - %s, repository - %s)", pullRequest.FromRef.DisplayID, pullRequest.FromRef.Repository.Slug)
 	}
 	return project.Key, nil
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *BitbucketServerClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetCurrentUser is not currently supported for Bitbucket Server")
+}
+
+// GetUser Gets user information by username on Bitbucket Server
+func (client *BitbucketServerClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetUser is not currently supported for Bitbucket Server")
 }

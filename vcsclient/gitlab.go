@@ -308,6 +308,16 @@ func (client *GitLabClient) GetPullRequestByID(_ context.Context, owner, reposit
 	return
 }
 
+// ListPullRequestsByUser on GitLab
+func (client *GitLabClient) ListPullRequestsByUser(_ context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByUser is not implemented for GitLab")
+}
+
+// ListPullRequestsByReviewer on GitLab
+func (client *GitLabClient) ListPullRequestsByReviewer(_ context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByReviewer is not implemented for GitLab")
+}
+
 // AddPullRequestComment on GitLab
 func (client *GitLabClient) AddPullRequestComment(ctx context.Context, owner, repository, content string, pullRequestID int) error {
 	err := validateParametersNotBlank(map[string]string{"owner": owner, "repository": repository, "content": content})
@@ -743,6 +753,53 @@ func (client *GitLabClient) GetModifiedFiles(_ context.Context, owner, repositor
 	return fileNamesList, nil
 }
 
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *GitLabClient) GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error) {
+	if err := validateParametersNotBlank(map[string]string{
+		"owner":      owner,
+		"repository": repository,
+	}); err != nil {
+		return nil, err
+	}
+
+	// Get detailed changes for the merge request
+	changes, _, err := client.glClient.MergeRequests.GetMergeRequestChanges(
+		getProjectID(owner, repository),
+		pullRequestID,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var fileChanges []FileChange
+	for _, change := range changes.Changes {
+		fileChange := FileChange{
+			Filename:         change.NewPath,
+			PreviousFilename: change.OldPath,
+			Additions:        0, // GitLab API doesn't provide line-level stats in changes
+			Deletions:        0,
+			Changes:          0,
+			Patch:            change.Diff,
+		}
+
+		// Determine status based on paths
+		if change.NewFile {
+			fileChange.Status = "added"
+		} else if change.DeletedFile {
+			fileChange.Status = "removed"
+		} else if change.RenamedFile {
+			fileChange.Status = "renamed"
+		} else {
+			fileChange.Status = "modified"
+		}
+
+		fileChanges = append(fileChanges, fileChange)
+	}
+
+	return fileChanges, nil
+}
+
 func (client *GitLabClient) ListPullRequestReviews(ctx context.Context, owner, repository string, pullRequestID int) ([]PullRequestReviewDetails, error) {
 	err := validateParametersNotBlank(map[string]string{"owner": owner, "repository": repository})
 	if err != nil {
@@ -757,13 +814,48 @@ func (client *GitLabClient) ListPullRequestReviews(ctx context.Context, owner, r
 
 	var reviewInfos []PullRequestReviewDetails
 	for _, review := range prNotes {
-		reviewInfos = append(reviewInfos, PullRequestReviewDetails{
+		reviewDetails := PullRequestReviewDetails{
 			ID:          int64(review.ID),
 			Reviewer:    review.Author.Username,
 			Body:        review.Body,
 			SubmittedAt: review.CreatedAt.Format(time.RFC3339),
 			CommitID:    review.CommitID,
-		})
+		}
+
+		// If this note has position information (inline comment), add it as a review comment
+		if review.Position != nil {
+			pos := review.Position
+			commentDetail := ReviewCommentDetails{
+				ID:        int64(review.ID),
+				Body:      review.Body,
+				DiffHunk:  "", // GitLab doesn't provide diff hunk text in the API
+				CreatedAt: *review.CreatedAt,
+			}
+
+			// Determine path and line based on new vs old path
+			if pos.NewPath != "" {
+				commentDetail.Path = pos.NewPath
+				commentDetail.Line = pos.NewLine
+				commentDetail.Side = "RIGHT"
+			} else if pos.OldPath != "" {
+				commentDetail.Path = pos.OldPath
+				commentDetail.Line = pos.OldLine
+				commentDetail.Side = "LEFT"
+			}
+
+			// Handle line range for multi-line comments
+			if pos.LineRange != nil && pos.LineRange.StartRange != nil {
+				if pos.NewPath != "" {
+					commentDetail.StartLine = pos.LineRange.StartRange.NewLine
+				} else {
+					commentDetail.StartLine = pos.LineRange.StartRange.OldLine
+				}
+			}
+
+			reviewDetails.Comments = append(reviewDetails.Comments, commentDetail)
+		}
+
+		reviewInfos = append(reviewInfos, reviewDetails)
 	}
 
 	return reviewInfos, nil
@@ -922,7 +1014,7 @@ func (client *GitLabClient) mapGitLabMergeRequestToPullRequestInfo(mergeRequest 
 	}
 
 	return PullRequestInfo{
-		ID:     int64(mergeRequest.IID),
+		Number: mergeRequest.IID,
 		Title:  mergeRequest.Title,
 		Body:   body,
 		Author: mergeRequest.Author.Username,
@@ -967,4 +1059,37 @@ func mapGitLabPullRequestState(state *vcsutils.PullRequestState) *string {
 		return nil
 	}
 	return &stateStringValue
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *GitLabClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetCurrentUser is not currently supported for GitLab")
+}
+
+// GetUser Gets user information by username on GitLab
+func (client *GitLabClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	users, _, err := client.glClient.Users.ListUsers(&gitlab.ListUsersOptions{
+		Username: &username,
+	})
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	if len(users) == 0 {
+		return UserInfo{}, fmt.Errorf("user '%s' not found", username)
+	}
+
+	user := users[0]
+	return UserInfo{
+		Login:     user.Username,
+		ID:        int64(user.ID),
+		Name:      user.Name,
+		Email:     user.Email,
+		AvatarURL: user.AvatarURL,
+	}, nil
 }

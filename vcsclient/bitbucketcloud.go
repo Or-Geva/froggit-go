@@ -360,6 +360,16 @@ func (client *BitbucketCloudClient) getOpenPullRequests(ctx context.Context, own
 	return mapBitbucketCloudPullRequestToPullRequestInfo(&parsedPullRequests, withBody), nil
 }
 
+// ListPullRequestsByUser on Bitbucket Cloud
+func (client *BitbucketCloudClient) ListPullRequestsByUser(ctx context.Context, username string) (res []PullRequestInfo, err error) {
+	return nil, errors.New("ListPullRequestsByUser is not implemented for Bitbucket Cloud")
+}
+
+// ListPullRequestsByReviewer on Bitbucket Cloud
+func (client *BitbucketCloudClient) ListPullRequestsByReviewer(ctx context.Context, username string) (res []PullRequestInfo, err error) {
+	return nil, errors.New("ListPullRequestsByReviewer is not implemented for Bitbucket Cloud")
+}
+
 func (client *BitbucketCloudClient) GetPullRequestByID(ctx context.Context, owner, repository string, pullRequestId int) (pullRequestInfo PullRequestInfo, err error) {
 	err = validateParametersNotBlank(map[string]string{"owner": owner, "repository": repository})
 	if err != nil {
@@ -386,7 +396,7 @@ func (client *BitbucketCloudClient) GetPullRequestByID(ctx context.Context, owne
 	targetOwner, targetRepository := splitBitbucketCloudRepoName(pullRequestDetails.Target.Repository.Name)
 
 	pullRequestInfo = PullRequestInfo{
-		ID:     pullRequestDetails.ID,
+		Number: pullRequestDetails.Number,
 		Title:  pullRequestDetails.Title,
 		Author: pullRequestDetails.Author.DisplayName,
 		Source: BranchInfo{
@@ -461,6 +471,7 @@ func (client *BitbucketCloudClient) ListPullRequestReviews(ctx context.Context, 
 			Body:        comment.Content.Raw,
 			SubmittedAt: comment.Created.Format(time.RFC3339),
 			CommitID:    "", // Bitbucket Cloud comments do not have a commit ID
+			Comments:    []ReviewCommentDetails{}, // Inline comment context not available in current implementation
 		})
 	}
 
@@ -703,6 +714,82 @@ func (client *BitbucketCloudClient) GetModifiedFiles(ctx context.Context, owner,
 	return fileNamesList, nil
 }
 
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *BitbucketCloudClient) GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error) {
+	err := validateParametersNotBlank(map[string]string{
+		"owner":      owner,
+		"repository": repository,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	bitbucketClient := client.buildBitbucketCloudClient(ctx)
+
+	// Get detailed diff stats for the PR using the pull request ID directly
+	diffOptions := &bitbucket.DiffStatOptions{
+		Owner:    owner,
+		RepoSlug: repository,
+		Spec:     strconv.Itoa(pullRequestID),
+		Renames:  true,
+		Merge:    true,
+	}
+
+	var fileChanges []FileChange
+	nextPage := 1
+
+	for nextPage > 0 {
+		diffOptions.PageNum = nextPage
+		diffStatRes, err := bitbucketClient.Repositories.Diff.GetDiffStat(diffOptions)
+		if err != nil {
+			return nil, err
+		}
+
+		if diffStatRes.Next == "" {
+			nextPage = -1
+		} else {
+			nextPage++
+		}
+
+		for _, diffStat := range diffStatRes.DiffStats {
+			fileChange := FileChange{
+				Additions: 0,
+				Deletions: diffStat.LinesRemoved,
+				Changes:   0,
+				Patch:     "", // Bitbucket Cloud doesn't provide patch in diffstat
+			}
+
+			// Extract new and old paths
+			if newPath, ok := diffStat.New["path"].(string); ok {
+				fileChange.Filename = newPath
+			}
+			if oldPath, ok := diffStat.Old["path"].(string); ok {
+				fileChange.PreviousFilename = oldPath
+			}
+
+			// Determine status based on paths
+			if fileChange.PreviousFilename == "" && fileChange.Filename != "" {
+				fileChange.Status = "added"
+			} else if fileChange.PreviousFilename != "" && fileChange.Filename == "" {
+				fileChange.Status = "removed"
+				fileChange.Filename = fileChange.PreviousFilename
+			} else if fileChange.PreviousFilename != fileChange.Filename {
+				fileChange.Status = "renamed"
+			} else {
+				fileChange.Status = "modified"
+			}
+
+			// LinesAdded is not a field on DiffStat in this version of the library
+			// The Additions can potentially be extracted from other fields if needed
+			fileChange.Changes = fileChange.Additions + fileChange.Deletions
+
+			fileChanges = append(fileChanges, fileChange)
+		}
+	}
+
+	return fileChanges, nil
+}
+
 func (client *BitbucketCloudClient) CreateBranch(ctx context.Context, owner, repository, sourceBranch, newBranch string) error {
 	return errBitbucketCreateBranchNotSupported
 }
@@ -752,12 +839,13 @@ type pullRequestsResponse struct {
 }
 
 type pullRequestsDetails struct {
-	ID     int64             `json:"id"`
-	Title  string            `json:"title"`
-	Body   string            `json:"description"`
-	Author Author            `json:"author"`
-	Source pullRequestBranch `json:"source"`
-	Target pullRequestBranch `json:"destination"`
+	Number    int               `json:"number"`
+	Title     string            `json:"title"`
+	Body      string            `json:"description"`
+	Author    Author            `json:"author"`
+	Source    pullRequestBranch `json:"source"`
+	Target    pullRequestBranch `json:"destination"`
+	Reviewers []Author          `json:"reviewers"`
 }
 
 type Author struct {
@@ -905,7 +993,7 @@ func mapBitbucketCloudPullRequestToPullRequestInfo(parsedPullRequests *pullReque
 			body = pullRequest.Body
 		}
 		pullRequests[i] = PullRequestInfo{
-			ID:     pullRequest.ID,
+			Number: pullRequest.Number,
 			Title:  pullRequest.Title,
 			Body:   body,
 			Author: pullRequest.Author.DisplayName,
@@ -937,4 +1025,14 @@ func splitBitbucketCloudRepoName(name string) (string, string) {
 		return "", ""
 	}
 	return split[0], split[1]
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *BitbucketCloudClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetCurrentUser is not currently supported for Bitbucket Cloud")
+}
+
+// GetUser Gets user information by username on Bitbucket Cloud
+func (client *BitbucketCloudClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetUser is not currently supported for Bitbucket Cloud")
 }

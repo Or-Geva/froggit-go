@@ -448,6 +448,84 @@ func (client *GitHubClient) GetPullRequestByID(ctx context.Context, owner, repos
 	return mapGitHubPullRequestToPullRequestInfo(pullRequest, false)
 }
 
+// ListPullRequestsByUser on GitHub using the Search API
+// Searches for all pull requests created by the specified user across all repositories
+func (client *GitHubClient) ListPullRequestsByUser(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	client.logger.Debug("Fetching pull requests for user", username, "across all repositories")
+
+	// Use Search API to filter by author on the server side
+	query := fmt.Sprintf("type:pr author:%s state:open", username)
+
+	var allIssues []*github.Issue
+	opts := &github.SearchOptions{
+		ListOptions: github.ListOptions{PerPage: 100, Page: 1},
+	}
+
+	// Paginate through all results
+	for {
+		var result *github.IssuesSearchResult
+		var ghResponse *github.Response
+		var err error
+
+		err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+			result, ghResponse, err = client.ghClient.Search.Issues(ctx, query, opts)
+			return ghResponse, err
+		})
+		if err != nil {
+			return []PullRequestInfo{}, err
+		}
+
+		allIssues = append(allIssues, result.Issues...)
+
+		if ghResponse.NextPage == 0 {
+			break
+		}
+		opts.Page = ghResponse.NextPage
+	}
+
+	// Convert GitHub Issues (which represent PRs) to PullRequestInfo
+	return mapGitHubIssuesToPullRequestInfoList(ctx, client, allIssues)
+}
+
+// ListPullRequestsByReviewer on GitHub using the Search API
+// Searches for all pull requests where the specified user is requested as a reviewer across all repositories
+func (client *GitHubClient) ListPullRequestsByReviewer(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	client.logger.Debug("Fetching pull requests reviewed by", username, "across all repositories")
+
+	// Use Search API to filter by review-requested on the server side
+	query := fmt.Sprintf("type:pr review-requested:%s state:open", username)
+
+	var allIssues []*github.Issue
+	opts := &github.SearchOptions{
+		ListOptions: github.ListOptions{PerPage: 100, Page: 1},
+	}
+
+	// Paginate through all results
+	for {
+		var result *github.IssuesSearchResult
+		var ghResponse *github.Response
+		var err error
+
+		err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+			result, ghResponse, err = client.ghClient.Search.Issues(ctx, query, opts)
+			return ghResponse, err
+		})
+		if err != nil {
+			return []PullRequestInfo{}, err
+		}
+
+		allIssues = append(allIssues, result.Issues...)
+
+		if ghResponse.NextPage == 0 {
+			break
+		}
+		opts.Page = ghResponse.NextPage
+	}
+
+	// Convert GitHub Issues (which represent PRs) to PullRequestInfo
+	return mapGitHubIssuesToPullRequestInfoList(ctx, client, allIssues)
+}
+
 func mapGitHubPullRequestToPullRequestInfo(ghPullRequest *github.PullRequest, withBody bool) (PullRequestInfo, error) {
 	var sourceBranch, targetBranch string
 	var err1, err2 error
@@ -485,12 +563,23 @@ func mapGitHubPullRequestToPullRequestInfo(ghPullRequest *github.PullRequest, wi
 		body = vcsutils.DefaultIfNotNil(ghPullRequest.Body)
 	}
 
+	// Extract reviewers
+	var reviewers []string
+	if ghPullRequest.RequestedReviewers != nil {
+		for _, reviewer := range ghPullRequest.RequestedReviewers {
+			if reviewer != nil && reviewer.Login != nil {
+				reviewers = append(reviewers, *reviewer.Login)
+			}
+		}
+	}
+
 	return PullRequestInfo{
-		ID:     int64(vcsutils.DefaultIfNotNil(ghPullRequest.Number)),
-		Title:  vcsutils.DefaultIfNotNil(ghPullRequest.Title),
-		URL:    vcsutils.DefaultIfNotNil(ghPullRequest.HTMLURL),
-		Body:   body,
-		Author: vcsutils.DefaultIfNotNil(ghPullRequest.User.Login),
+		Number:    vcsutils.DefaultIfNotNil(ghPullRequest.Number),
+		Title:     vcsutils.DefaultIfNotNil(ghPullRequest.Title),
+		URL:       vcsutils.DefaultIfNotNil(ghPullRequest.HTMLURL),
+		Body:      body,
+		Author:    vcsutils.DefaultIfNotNil(ghPullRequest.User.Login),
+		Reviewers: reviewers,
 		Source: BranchInfo{
 			Name:       sourceBranch,
 			Repository: sourceRepoName,
@@ -611,45 +700,138 @@ func (client *GitHubClient) ListPullRequestReviews(ctx context.Context, owner, r
 		return nil, err
 	}
 
+	// Fetch ALL reviews with pagination (max 100 per page)
 	var reviews []*github.PullRequestReview
-	err = client.runWithRateLimitRetries(func() (*github.Response, error) {
-		var ghResponse *github.Response
-		reviews, ghResponse, err = client.ghClient.PullRequests.ListReviews(ctx, owner, repository, pullRequestID, nil)
-		return ghResponse, err
-	})
-	if err != nil {
-		return nil, err
+	opts := &github.ListOptions{PerPage: 100}
+
+	for {
+		var pageReviews []*github.PullRequestReview
+		var resp *github.Response
+		err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+			pageReviews, resp, err = client.ghClient.PullRequests.ListReviews(ctx, owner, repository, pullRequestID, opts)
+			return resp, err
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		reviews = append(reviews, pageReviews...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	// Fetch ALL review comments for the pull request with pagination (max 100 per page)
+	var allComments []*github.PullRequestComment
+	commentOpts := &github.PullRequestListCommentsOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+
+	for {
+		var pageComments []*github.PullRequestComment
+		var resp *github.Response
+		err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+			pageComments, resp, err = client.ghClient.PullRequests.ListComments(ctx, owner, repository, pullRequestID, commentOpts)
+			return resp, err
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		allComments = append(allComments, pageComments...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		commentOpts.Page = resp.NextPage
+	}
+
+	// Group comments by review ID
+	commentsByReviewID := make(map[int64][]*github.PullRequestComment)
+	for _, comment := range allComments {
+		if comment.GetPullRequestReviewID() != 0 {
+			reviewID := comment.GetPullRequestReviewID()
+			commentsByReviewID[reviewID] = append(commentsByReviewID[reviewID], comment)
+		}
 	}
 
 	var reviewInfos []PullRequestReviewDetails
 	for _, review := range reviews {
-		reviewInfos = append(reviewInfos, PullRequestReviewDetails{
+		reviewDetails := PullRequestReviewDetails{
 			ID:          review.GetID(),
 			Reviewer:    review.GetUser().GetLogin(),
 			Body:        review.GetBody(),
 			State:       review.GetState(),
 			SubmittedAt: review.GetSubmittedAt().String(),
 			CommitID:    review.GetCommitID(),
-		})
+		}
+
+		// Add associated review comments with diff context
+		if comments, ok := commentsByReviewID[review.GetID()]; ok {
+			for _, comment := range comments {
+				// Check if comment is outdated (GitHub sets this when code has changed)
+				isOutdated := false
+				if comment.Line != nil && comment.OriginalLine != nil {
+					// If line numbers differ, the comment is outdated
+					isOutdated = *comment.Line != *comment.OriginalLine
+				}
+
+				reviewCommentDetail := ReviewCommentDetails{
+					ID:        comment.GetID(),
+					Body:      comment.GetBody(),
+					DiffHunk:  comment.GetDiffHunk(),
+					Path:      comment.GetPath(),
+					Line:      comment.GetLine(),
+					StartLine: comment.GetStartLine(),
+					Side:      comment.GetSide(),
+					CreatedAt: comment.GetCreatedAt().Time,
+					Outdated:  isOutdated,
+				}
+				reviewDetails.Comments = append(reviewDetails.Comments, reviewCommentDetail)
+			}
+		}
+
+		reviewInfos = append(reviewInfos, reviewDetails)
 	}
 
 	return reviewInfos, nil
 }
 
 func (client *GitHubClient) executeListPullRequestReviewComments(ctx context.Context, owner, repository string, pullRequestID int) ([]CommentInfo, *github.Response, error) {
-	commentsList, ghResponse, err := client.ghClient.PullRequests.ListComments(ctx, owner, repository, pullRequestID, nil)
-	if err != nil {
-		return []CommentInfo{}, ghResponse, err
+	// Fetch ALL review comments with pagination (max 100 per page)
+	var allComments []*github.PullRequestComment
+	opts := &github.PullRequestListCommentsOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
 	}
+
+	var lastResp *github.Response
+	for {
+		commentsList, ghResponse, err := client.ghClient.PullRequests.ListComments(ctx, owner, repository, pullRequestID, opts)
+		if err != nil {
+			return []CommentInfo{}, ghResponse, err
+		}
+
+		allComments = append(allComments, commentsList...)
+		lastResp = ghResponse
+
+		if ghResponse.NextPage == 0 {
+			break
+		}
+		opts.Page = ghResponse.NextPage
+	}
+
+	// Convert all comments to CommentInfo
 	commentsInfoList := []CommentInfo{}
-	for _, comment := range commentsList {
+	for _, comment := range allComments {
 		commentsInfoList = append(commentsInfoList, CommentInfo{
 			ID:      comment.GetID(),
 			Content: comment.GetBody(),
 			Created: comment.GetCreatedAt().Time,
 		})
 	}
-	return commentsInfoList, ghResponse, nil
+	return commentsInfoList, lastResp, nil
 }
 
 // ListPullRequestComments on GitHub
@@ -659,18 +841,32 @@ func (client *GitHubClient) ListPullRequestComments(ctx context.Context, owner, 
 		return []CommentInfo{}, err
 	}
 
-	var commentsList []*github.IssueComment
-	err = client.runWithRateLimitRetries(func() (*github.Response, error) {
-		var ghResponse *github.Response
-		commentsList, ghResponse, err = client.ghClient.Issues.ListComments(ctx, owner, repository, pullRequestID, &github.IssueListCommentsOptions{})
-		return ghResponse, err
-	})
-
-	if err != nil {
-		return []CommentInfo{}, err
+	// Fetch ALL issue comments with pagination (max 100 per page)
+	var allComments []*github.IssueComment
+	opts := &github.IssueListCommentsOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
 	}
 
-	return mapGitHubIssuesCommentToCommentInfoList(commentsList)
+	for {
+		var pageComments []*github.IssueComment
+		var resp *github.Response
+		err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+			pageComments, resp, err = client.ghClient.Issues.ListComments(ctx, owner, repository, pullRequestID, opts)
+			return resp, err
+		})
+		if err != nil {
+			return []CommentInfo{}, err
+		}
+
+		allComments = append(allComments, pageComments...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return mapGitHubIssuesCommentToCommentInfoList(allComments)
 }
 
 // DeletePullRequestReviewComments on GitHub
@@ -1491,6 +1687,75 @@ func (client *GitHubClient) executeGetModifiedFiles(ctx context.Context, owner, 
 	return fileNamesList, ghResponse, nil
 }
 
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *GitHubClient) GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error) {
+	err := validateParametersNotBlank(map[string]string{
+		"owner":      owner,
+		"repository": repository,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// First, get the pull request to obtain base and head refs
+	var pr *github.PullRequest
+	err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+		var ghResponse *github.Response
+		pr, ghResponse, err = client.ghClient.PullRequests.Get(ctx, owner, repository, pullRequestID)
+		return ghResponse, err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err = vcsutils.CheckResponseStatusWithBody(&http.Response{StatusCode: http.StatusOK}, http.StatusOK); err != nil {
+		return nil, err
+	}
+
+	// Get the base and head refs from the pull request
+	baseSHA := vcsutils.DefaultIfNotNil(pr.Base.SHA)
+	headSHA := vcsutils.DefaultIfNotNil(pr.Head.SHA)
+
+	// Now compare the commits to get detailed file changes
+	var fileChanges []FileChange
+	err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+		var ghResponse *github.Response
+		fileChanges, ghResponse, err = client.executeGetCommitComparison(ctx, owner, repository, baseSHA, headSHA)
+		return ghResponse, err
+	})
+	return fileChanges, err
+}
+
+func (client *GitHubClient) executeGetCommitComparison(ctx context.Context, owner, repository, refBefore, refAfter string) ([]FileChange, *github.Response, error) {
+	// Use a larger PerPage to get more file details in a single request
+	listOptions := &github.ListOptions{PerPage: 100}
+
+	comparison, ghResponse, err := client.ghClient.Repositories.CompareCommits(ctx, owner, repository, refBefore, refAfter, listOptions)
+	if err != nil {
+		return nil, ghResponse, err
+	}
+
+	if err = vcsutils.CheckResponseStatusWithBody(ghResponse.Response, http.StatusOK); err != nil {
+		return nil, ghResponse, err
+	}
+
+	var fileChanges []FileChange
+	for _, file := range comparison.Files {
+		fileChange := FileChange{
+			Filename:         vcsutils.DefaultIfNotNil(file.Filename),
+			PreviousFilename: vcsutils.DefaultIfNotNil(file.PreviousFilename),
+			Status:           vcsutils.DefaultIfNotNil(file.Status),
+			Additions:        vcsutils.DefaultIfNotNil(file.Additions),
+			Deletions:        vcsutils.DefaultIfNotNil(file.Deletions),
+			Changes:          vcsutils.DefaultIfNotNil(file.Changes),
+			Patch:            vcsutils.DefaultIfNotNil(file.Patch),
+		}
+		fileChanges = append(fileChanges, fileChange)
+	}
+
+	return fileChanges, ghResponse, nil
+}
+
 // Extract code reviewers from environment
 func extractGitHubEnvironmentReviewers(environment *github.Environment) ([]string, error) {
 	var reviewers []string
@@ -1661,6 +1926,100 @@ func encryptSecret(publicKey *github.PublicKey, secretValue string) (string, err
 	return encryptedBase64, nil
 }
 
+// parseOwnerAndRepoFromURL extracts owner and repository name from a GitHub repository URL
+// Expected format: "https://api.github.com/repos/owner/repository"
+func parseOwnerAndRepoFromURL(repoURL string) (owner, repo string, err error) {
+	if repoURL == "" {
+		return "", "", fmt.Errorf("repository URL is empty")
+	}
+
+	// Split by "/" and extract the last two segments
+	parts := strings.Split(repoURL, "/")
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("invalid repository URL format: %s", repoURL)
+	}
+
+	// The last two parts should be owner and repo
+	repo = parts[len(parts)-1]
+	owner = parts[len(parts)-2]
+
+	if owner == "" || repo == "" {
+		return "", "", fmt.Errorf("could not extract owner/repo from URL: %s", repoURL)
+	}
+
+	return owner, repo, nil
+}
+
+// mapGitHubIssueToPullRequestInfo converts a GitHub Issue (from Search API) directly to PullRequestInfo
+// without making an additional API call to fetch full PR details.
+// Note: This provides basic PR information but lacks branch names and reviewer details that require the full PR object.
+func mapGitHubIssueToPullRequestInfo(issue *github.Issue) (PullRequestInfo, error) {
+	if issue == nil {
+		return PullRequestInfo{}, fmt.Errorf("issue is nil")
+	}
+
+	// Extract owner and repository from the RepositoryURL
+	owner, repo, err := parseOwnerAndRepoFromURL(issue.GetRepositoryURL())
+	if err != nil {
+		return PullRequestInfo{}, fmt.Errorf("failed to parse repository URL: %w", err)
+	}
+
+	// Create PullRequestInfo with available data from Issue
+	// Note: Branch information and reviewers are not available in the Issue object
+	// and would require an additional API call to fetch the full PR
+	prInfo := PullRequestInfo{
+		Number: issue.GetNumber(),
+		Title:  issue.GetTitle(),
+		Body:   issue.GetBody(),
+		URL:    issue.GetHTMLURL(),
+		Author: issue.GetUser().GetLogin(),
+		// Reviewers information is not available in Issue objects
+		Reviewers: []string{},
+		// Source branch info - we only have repository details, not branch names
+		Source: BranchInfo{
+			Name:       "", // Not available in Issue object
+			Repository: repo,
+			Owner:      owner,
+		},
+		// Target branch info - we only have repository details, not branch names
+		Target: BranchInfo{
+			Name:       "", // Not available in Issue object
+			Repository: repo,
+			Owner:      owner,
+		},
+		Status: issue.GetState(),
+	}
+
+	return prInfo, nil
+}
+
+// mapGitHubIssuesToPullRequestInfoList converts GitHub Issues (from Search API) to PullRequestInfo list
+// This function directly maps Issue data without making additional API calls for full PR details.
+// Note: The resulting PullRequestInfo objects will not have branch names or reviewer information,
+// as these are not available in the Issue objects returned by the Search API.
+func mapGitHubIssuesToPullRequestInfoList(ctx context.Context, client *GitHubClient, issues []*github.Issue) ([]PullRequestInfo, error) {
+	var result []PullRequestInfo
+
+	for _, issue := range issues {
+		// GitHub Search API returns Issues, but we only want PRs
+		if issue.PullRequestLinks == nil {
+			// Skip if it's not actually a PR (shouldn't happen with type:pr filter, but be safe)
+			continue
+		}
+
+		// Map the issue directly to PullRequestInfo without additional API call
+		prInfo, err := mapGitHubIssueToPullRequestInfo(issue)
+		if err != nil {
+			client.logger.Debug("Skipping issue due to mapping error:", issue.GetNumber(), "error:", err)
+			continue
+		}
+
+		result = append(result, prInfo)
+	}
+
+	return result, nil
+}
+
 func (client *GitHubClient) ListAppRepositories(ctx context.Context) ([]AppRepositoryInfo, error) {
 	var results []AppRepositoryInfo
 
@@ -1786,4 +2145,51 @@ func convertToGitHubSnapshot(snapshot *SbomSnapshot) (*github.DependencyGraphSna
 		ghSnapshot.Manifests[manifestName] = ghManifest
 	}
 	return ghSnapshot, nil
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *GitHubClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	var user *github.User
+	err := client.runWithRateLimitRetries(func() (*github.Response, error) {
+		var ghResponse *github.Response
+		var err error
+		user, ghResponse, err = client.ghClient.Users.Get(ctx, "")
+		return ghResponse, err
+	})
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	return mapGitHubUserToUserInfo(user), nil
+}
+
+// GetUser Gets user information by username on GitHub
+func (client *GitHubClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	var user *github.User
+	err = client.runWithRateLimitRetries(func() (*github.Response, error) {
+		var ghResponse *github.Response
+		var err error
+		user, ghResponse, err = client.ghClient.Users.Get(ctx, username)
+		return ghResponse, err
+	})
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	return mapGitHubUserToUserInfo(user), nil
+}
+
+func mapGitHubUserToUserInfo(user *github.User) UserInfo {
+	return UserInfo{
+		Login:     vcsutils.DefaultIfNotNil(user.Login),
+		ID:        user.GetID(),
+		Name:      vcsutils.DefaultIfNotNil(user.Name),
+		Email:     vcsutils.DefaultIfNotNil(user.Email),
+		AvatarURL: vcsutils.DefaultIfNotNil(user.AvatarURL),
+	}
 }
