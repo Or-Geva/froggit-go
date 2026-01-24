@@ -360,6 +360,16 @@ func (client *BitbucketCloudClient) getOpenPullRequests(ctx context.Context, own
 	return mapBitbucketCloudPullRequestToPullRequestInfo(&parsedPullRequests, withBody), nil
 }
 
+// ListPullRequestsByUser on Bitbucket Cloud
+func (client *BitbucketCloudClient) ListPullRequestsByUser(ctx context.Context, username string) (res []PullRequestInfo, err error) {
+	return nil, errors.New("ListPullRequestsByUser is not implemented for Bitbucket Cloud")
+}
+
+// ListPullRequestsByReviewer on Bitbucket Cloud
+func (client *BitbucketCloudClient) ListPullRequestsByReviewer(ctx context.Context, username string) (res []PullRequestInfo, err error) {
+	return nil, errors.New("ListPullRequestsByReviewer is not implemented for Bitbucket Cloud")
+}
+
 func (client *BitbucketCloudClient) GetPullRequestByID(ctx context.Context, owner, repository string, pullRequestId int) (pullRequestInfo PullRequestInfo, err error) {
 	err = validateParametersNotBlank(map[string]string{"owner": owner, "repository": repository})
 	if err != nil {
@@ -386,7 +396,7 @@ func (client *BitbucketCloudClient) GetPullRequestByID(ctx context.Context, owne
 	targetOwner, targetRepository := splitBitbucketCloudRepoName(pullRequestDetails.Target.Repository.Name)
 
 	pullRequestInfo = PullRequestInfo{
-		ID:     pullRequestDetails.ID,
+		Number: pullRequestDetails.Number,
 		Title:  pullRequestDetails.Title,
 		Author: pullRequestDetails.Author.DisplayName,
 		Source: BranchInfo{
@@ -401,6 +411,11 @@ func (client *BitbucketCloudClient) GetPullRequestByID(ctx context.Context, owne
 		},
 	}
 	return
+}
+
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *BitbucketCloudClient) GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error) {
+	return nil, errors.New("GetPullRequestDiff is not yet implemented for Bitbucket Cloud")
 }
 
 // AddPullRequestComment on Bitbucket cloud
@@ -461,6 +476,7 @@ func (client *BitbucketCloudClient) ListPullRequestReviews(ctx context.Context, 
 			Body:        comment.Content.Raw,
 			SubmittedAt: comment.Created.Format(time.RFC3339),
 			CommitID:    "", // Bitbucket Cloud comments do not have a commit ID
+			Comments:    []ReviewCommentDetails{}, // Inline comment context not available in current implementation
 		})
 	}
 
@@ -752,12 +768,13 @@ type pullRequestsResponse struct {
 }
 
 type pullRequestsDetails struct {
-	ID     int64             `json:"id"`
-	Title  string            `json:"title"`
-	Body   string            `json:"description"`
-	Author Author            `json:"author"`
-	Source pullRequestBranch `json:"source"`
-	Target pullRequestBranch `json:"destination"`
+	Number    int               `json:"number"`
+	Title     string            `json:"title"`
+	Body      string            `json:"description"`
+	Author    Author            `json:"author"`
+	Source    pullRequestBranch `json:"source"`
+	Target    pullRequestBranch `json:"destination"`
+	Reviewers []Author          `json:"reviewers"`
 }
 
 type Author struct {
@@ -905,7 +922,7 @@ func mapBitbucketCloudPullRequestToPullRequestInfo(parsedPullRequests *pullReque
 			body = pullRequest.Body
 		}
 		pullRequests[i] = PullRequestInfo{
-			ID:     pullRequest.ID,
+			Number: pullRequest.Number,
 			Title:  pullRequest.Title,
 			Body:   body,
 			Author: pullRequest.Author.DisplayName,
@@ -937,4 +954,14 @@ func splitBitbucketCloudRepoName(name string) (string, string) {
 		return "", ""
 	}
 	return split[0], split[1]
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *BitbucketCloudClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetCurrentUser is not currently supported for Bitbucket Cloud")
+}
+
+// GetUser Gets user information by username on Bitbucket Cloud
+func (client *BitbucketCloudClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetUser is not currently supported for Bitbucket Cloud")
 }

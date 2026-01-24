@@ -286,7 +286,7 @@ func TestGitLabClient_ListOpenPullRequests(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     302,
+		Number:     302,
 		Title:  "test1",
 		Author: "admin",
 		Source: BranchInfo{Name: "test1", Repository: repo1, Owner: owner},
@@ -299,7 +299,7 @@ func TestGitLabClient_ListOpenPullRequests(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     302,
+		Number:     302,
 		Title:  "test1",
 		Author: "admin",
 		Body:   "hello world",
@@ -323,7 +323,7 @@ func TestGitLabClient_GetPullRequestByID(t *testing.T) {
 	result, err := client.GetPullRequestByID(ctx, owner, repoName, pullRequestId)
 	assert.NoError(t, err)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     133,
+		Number:     133,
 		Title:  "Manual job rules",
 		Author: "marcel.amirault",
 		Source: BranchInfo{Name: "manual-job-rules", Repository: repoName, Owner: owner},
@@ -1018,7 +1018,7 @@ func TestGitLabClient_ListPullRequestsAssociatedWithCommit(t *testing.T) {
 	result, err := client.ListPullRequestsAssociatedWithCommit(ctx, owner, repo1, "commitsha1")
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
-	assert.Equal(t, int64(1), result[0].ID)
+	assert.Equal(t, int64(1), result[0].Number)
 	assert.Equal(t, "https://gitlab.example.com/my-group/my-project/merge_requests/1", result[0].URL)
 	assert.Equal(t, "Fix bug", result[0].Body)
 	assert.Equal(t, "feature-branch", result[0].Source.Name)

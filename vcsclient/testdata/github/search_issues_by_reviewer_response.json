@@ -1,0 +1,21 @@
+{
+  "total_count": 1,
+  "incomplete_results": false,
+  "items": [
+    {
+      "id": 2,
+      "number": 456,
+      "title": "Fix critical bug",
+      "state": "open",
+      "html_url": "https://github.com/jfrog/froggit-go/pull/456",
+      "body": "Bug fix description",
+      "user": {
+        "login": "author-user"
+      },
+      "repository_url": "https://api.github.com/repos/jfrog/froggit-go",
+      "pull_request": {
+        "url": "https://api.github.com/repos/jfrog/froggit-go/pulls/456"
+      }
+    }
+  ]
+}

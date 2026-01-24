@@ -431,6 +431,21 @@ func (client *AzureReposClient) GetPullRequestByID(ctx context.Context, owner, r
 	return
 }
 
+// ListPullRequestsByUser on Azure Repos
+func (client *AzureReposClient) ListPullRequestsByUser(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByUser is not implemented for Azure Repos")
+}
+
+// ListPullRequestsByReviewer on Azure Repos
+func (client *AzureReposClient) ListPullRequestsByReviewer(ctx context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByReviewer is not implemented for Azure Repos")
+}
+
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *AzureReposClient) GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error) {
+	return nil, errors.New("GetPullRequestDiff is not yet implemented for Azure Repos")
+}
+
 // GetLatestCommit on Azure Repos
 func (client *AzureReposClient) GetLatestCommit(ctx context.Context, _, repository, branch string) (CommitInfo, error) {
 	commitsInfo, err := client.GetCommits(ctx, "", repository, branch)
@@ -828,7 +843,7 @@ func parsePullRequestDetails(client *AzureReposClient, pullRequest git.GitPullRe
 		}
 	}
 	return PullRequestInfo{
-		ID:     int64(*pullRequest.PullRequestId),
+		Number: *pullRequest.PullRequestId,
 		Title:  vcsutils.DefaultIfNotNil(pullRequest.Title),
 		Body:   prBody,
 		URL:    vcsutils.DefaultIfNotNil(pullRequest.Url),
@@ -901,4 +916,14 @@ func mapVoteToState(vote int) string {
 	default:
 		return "UNKNOWN"
 	}
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *AzureReposClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetCurrentUser is not currently supported for Azure Repos")
+}
+
+// GetUser Gets user information by username on Azure Repos
+func (client *AzureReposClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetUser is not currently supported for Azure Repos")
 }

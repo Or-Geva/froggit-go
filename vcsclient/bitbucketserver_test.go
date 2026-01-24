@@ -252,7 +252,7 @@ func TestBitbucketServer_ListOpenPullRequests(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     101,
+		Number:     101,
 		Title:  "Talking Nerdy",
 		Author: "tom",
 		Source: BranchInfo{Name: "feature-ABC-123", Repository: repo1, Owner: forkedOwner},
@@ -266,7 +266,7 @@ func TestBitbucketServer_ListOpenPullRequests(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     101,
+		Number:     101,
 		Title:  "Talking Nerdy",
 		Author: "tom",
 		Body:   "hello world",
@@ -289,7 +289,7 @@ func TestBitbucketServerClient_GetPullRequest(t *testing.T) {
 	result, err := client.GetPullRequestByID(ctx, owner, repo1, pullRequestId)
 	assert.NoError(t, err)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     int64(pullRequestId),
+		Number:     int(pullRequestId),
 		Title:  "New vul 2",
 		Author: "owner",
 		Source: BranchInfo{Name: "new_vul_2", Repository: "repoName", Owner: "~fromOwner"},

@@ -44,6 +44,8 @@ Currently supported providers are: [GitHub](#github), [Bitbucket Server](#bitbuc
       - [Create Pull Request](#create-pull-request)
       - [Update Pull Request](#update-pull-request)
       - [Get Pull Request By ID](#get-pull-request-by-id)
+      - [List Pull Requests By User](#list-pull-requests-by-user)
+      - [List Pull Requests By Reviewer](#list-pull-requests-by-reviewer)
       - [List Open Pull Requests](#list-open-pull-requests)
       - [List Open Pull Requests With Body](#list-open-pull-requests-with-body)
       - [Add Pull Request Comment](#add-pull-request-comment)
@@ -87,6 +89,8 @@ Currently supported providers are: [GitHub](#github), [Bitbucket Server](#bitbuc
 
 GitHub api v3 is used
 
+**Method 1: Using Access Token (Traditional)**
+
 ```go
 // The VCS provider. Cannot be changed.
 vcsProvider := vcsutils.GitHub
@@ -102,6 +106,75 @@ logger := log.Default()
 
 client, err := vcsclient.NewClientBuilder(vcsProvider).ApiEndpoint(apiEndpoint).Token(token).Build()
 ```
+
+**Method 2: Using OAuth (Desktop Applications)**
+
+For desktop applications, use the OAuth client to obtain an access token:
+
+```go
+import (
+    "context"
+    "github.com/jfrog/froggit-go/vcsclient"
+    "github.com/jfrog/froggit-go/vcsutils"
+)
+
+// 1. Create OAuth client
+oauthClient, err := vcsclient.NewGitHubOAuthClient(
+    vcsclient.GitHubOAuthClientID, // Your OAuth app client ID
+    []string{"repo"},               // Scopes (repo = read/write access)
+    vcsutils.EmptyLogger{},
+)
+if err != nil {
+    panic(err)
+}
+
+// 2. Get authorization URL
+authURL, err := oauthClient.GetAuthorizationURL()
+if err != nil {
+    panic(err)
+}
+
+// 3. Start callback server
+ctx := context.Background()
+err = oauthClient.StartCallbackServer(ctx)
+if err != nil {
+    panic(err)
+}
+
+// 4. Open browser to authURL (user authorizes)
+// In your app: open browser with authURL
+
+// 5. Wait for callback (blocks until user authorizes or timeout)
+token, err := oauthClient.WaitForCallback(ctx)
+if err != nil {
+    panic(err)
+}
+
+// 6. Create VCS client with OAuth token
+client, err := vcsclient.NewClientBuilder(vcsutils.GitHub).
+    Token(token.AccessToken).
+    Build()
+if err != nil {
+    panic(err)
+}
+
+// 7. Use client as normal
+err = client.TestConnection(ctx)
+```
+
+**OAuth Features:**
+- **PKCE Protection**: No client secret required for desktop apps
+- **CSRF Protection**: State parameter validation
+- **Scope Validation**: Ensures token has required permissions
+- **Automatic Token Exchange**: Handles OAuth 2.0 flow automatically
+- **Callback Server**: Built-in localhost server on port 8989
+- **Timeout Handling**: 2-minute default timeout with cancellation support
+
+**OAuth Setup:**
+1. Register OAuth app at https://github.com/settings/applications/new
+2. Set callback URL to `http://127.0.0.1:8989/callback`
+3. Copy Client ID and use in `NewGitHubOAuthClient`
+4. Do NOT use Client Secret (use PKCE instead)
 
 ##### GitLab
 
@@ -455,6 +528,70 @@ pullRequestId := 1
 
 openPullRequests, err := client.GetPullRequestByID(ctx, owner, repository, pullRequestId)
 ```
+
+#### List Pull Requests By User
+
+Get all open pull requests created by a specific user across all repositories accessible to the authenticated user.
+
+```go
+// Go context
+ctx := context.Background()
+// Username to filter by
+username := "octocat"
+
+// List all pull requests created by the specified user across all repositories
+// Note: Currently only implemented for GitHub
+// Returns: []PullRequestInfo containing PR details (title, URL, branch info, etc.)
+pullRequests, err := client.ListPullRequestsByUser(ctx, username)
+if err != nil {
+    // handle error
+}
+
+// Example: Print PR details
+for _, pr := range pullRequests {
+    fmt.Printf("PR #%d: %s\n", pr.Number, pr.Title)
+    fmt.Printf("  Author: %s\n", pr.Author)
+    fmt.Printf("  URL: %s\n", pr.URL)
+    fmt.Printf("  Source: %s/%s:%s\n", pr.Source.Owner, pr.Source.Repository, pr.Source.Name)
+    fmt.Printf("  Target: %s/%s:%s\n", pr.Target.Owner, pr.Target.Repository, pr.Target.Name)
+}
+```
+
+#### List Pull Requests By Reviewer
+
+Get all open pull requests where a specific user is requested as a reviewer across all repositories accessible to the authenticated user. This includes PRs where the user has been requested to review but hasn't submitted their review yet.
+
+```go
+// Go context
+ctx := context.Background()
+// Username to filter by
+username := "octocat"
+
+// List all pull requests where the specified user is requested as a reviewer across all repositories
+// Note: Currently only implemented for GitHub
+// Returns: []PullRequestInfo containing PR details including reviewer information
+pullRequests, err := client.ListPullRequestsByReviewer(ctx, username)
+if err != nil {
+    // handle error
+}
+
+// Example: Print PR details with reviewers
+for _, pr := range pullRequests {
+    fmt.Printf("PR #%d: %s\n", pr.Number, pr.Title)
+    fmt.Printf("  Author: %s\n", pr.Author)
+    fmt.Printf("  URL: %s\n", pr.URL)
+    fmt.Printf("  Source: %s/%s:%s\n", pr.Source.Owner, pr.Source.Repository, pr.Source.Name)
+    fmt.Printf("  Target: %s/%s:%s\n", pr.Target.Owner, pr.Target.Repository, pr.Target.Name)
+    fmt.Printf("  Reviewers: %v\n", pr.Reviewers)
+}
+```
+
+**Important Notes:**
+- `ListPullRequestsByUser` searches for PRs **authored** by the specified user
+- `ListPullRequestsByReviewer` searches for PRs where the user is **requested as a reviewer** (pending review)
+- Both functions iterate through all repositories accessible to the authenticated user
+- The returned `PullRequestInfo` includes complete details: title, author, URL, branch names, and reviewer information
+- Once a reviewer submits their review, they are removed from the requested reviewers list
 
 ##### Add Pull Request Comment
 

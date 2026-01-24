@@ -676,7 +676,7 @@ func TestGitHubClient_ListOpenPullRequests(t *testing.T) {
 	assert.Len(t, result, 1)
 	assert.NoError(t, err)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     1347,
+		Number: 1347,
 		Title:  "Amazing new feature",
 		Author: "octocat",
 		Source: BranchInfo{Name: "new-topic", Repository: "Hello-World", Owner: owner},
@@ -694,7 +694,7 @@ func TestGitHubClient_ListOpenPullRequests(t *testing.T) {
 	assert.Len(t, result, 1)
 	assert.NoError(t, err)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     1347,
+		Number: 1347,
 		Title:  "Amazing new feature",
 		Body:   "hello world",
 		Author: "octocat",
@@ -724,7 +724,7 @@ func TestGitHubClient_GetPullRequestByID(t *testing.T) {
 	result, err := client.GetPullRequestByID(ctx, owner, repoName, pullRequestId)
 	assert.NoError(t, err)
 	assert.EqualValues(t, PullRequestInfo{
-		ID:     int64(pullRequestId),
+		Number: pullRequestId,
 		Title:  "Amazing new feature",
 		Source: BranchInfo{Name: "new-topic", Repository: "Hello-World", Owner: owner},
 		Target: BranchInfo{Name: "master", Repository: "Hello-World", Owner: forkedOwner},
@@ -815,7 +815,7 @@ func TestGitHubClient_ListPullRequestsAssociatedWithCommit(t *testing.T) {
 	assert.Len(t, result, 1)
 
 	expected := PullRequestInfo{
-		ID:   1347,
+		Number:   1347,
 		Body: "",
 		URL:  "https://github.com/octocat/Hello-World/pull/1347",
 		Source: BranchInfo{
@@ -830,7 +830,7 @@ func TestGitHubClient_ListPullRequestsAssociatedWithCommit(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, expected.ID, result[0].ID)
+	assert.Equal(t, expected.Number, result[0].Number)
 	assert.Equal(t, expected.Body, result[0].Body)
 	assert.Equal(t, expected.URL, result[0].URL)
 	assert.Equal(t, expected.Source, result[0].Source)
@@ -971,6 +971,73 @@ func TestGitHubClient_GetModifiedFiles(t *testing.T) {
 		_, err := client.GetModifiedFiles(ctx, owner, repo1, "sha-1", "sha-2")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "repos/jfrog/repo-1/compare/sha-1...sha-2?per_page=1: 500  []")
+	})
+}
+
+func TestGitHubClient_GetPullRequestDiff(t *testing.T) {
+	ctx := context.Background()
+	prNumber := 1
+
+	t.Run("ok", func(t *testing.T) {
+		// Load test data
+		prResponse, err := os.ReadFile(filepath.Join("testdata", "github", "pull_request_info_response.json"))
+		assert.NoError(t, err)
+		compareResponse, err := os.ReadFile(filepath.Join("testdata", "github", "compare_commits.json"))
+		assert.NoError(t, err)
+
+		// Create mock responses for different endpoints
+		expectedResponses := map[string]mockGitHubResponse{
+			"/repos/jfrog/repo-1/pulls/1": {
+				StatusCode: http.StatusOK,
+				Response:   prResponse,
+			},
+			"/repos/jfrog/repo-1/compare/6dcb09b5b57875f334f61aebed695e2e4193db5e...6dcb09b5b57875f334f61aebed695e2e4193db5e?per_page=100": {
+				StatusCode: http.StatusOK,
+				Response:   compareResponse,
+			},
+		}
+
+		client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, nil, "", createGitHubHandlerWithMultiResponse(t, expectedResponses))
+		defer cleanUp()
+
+		fileChanges, err := client.GetPullRequestDiff(ctx, owner, repo1, prNumber)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, fileChanges)
+
+		// Verify structure of returned data
+		for _, fc := range fileChanges {
+			assert.NotEmpty(t, fc.Filename)
+			assert.Contains(t, []string{"added", "modified", "removed", "renamed"}, fc.Status)
+		}
+	})
+
+	t.Run("validation fails", func(t *testing.T) {
+		client := GitHubClient{}
+		_, err := client.GetPullRequestDiff(ctx, "", repo1, prNumber)
+		assert.EqualError(t, err, "validation failed: required parameter 'owner' is missing")
+		_, err = client.GetPullRequestDiff(ctx, owner, "", prNumber)
+		assert.EqualError(t, err, "validation failed: required parameter 'repository' is missing")
+	})
+
+	t.Run("failed to get PR", func(t *testing.T) {
+		client, cleanUp := createServerAndClientReturningStatus(
+			t,
+			vcsutils.GitHub,
+			true,
+			nil,
+			"/repos/jfrog/repo-1/pulls/1",
+			http.StatusNotFound,
+			createGitHubHandler,
+		)
+		defer cleanUp()
+		_, err := client.GetPullRequestDiff(ctx, owner, repo1, prNumber)
+		assert.Error(t, err)
+	})
+
+	t.Run("bad client", func(t *testing.T) {
+		client := createBadGitHubClient(t)
+		_, err := client.GetPullRequestDiff(ctx, owner, repo1, prNumber)
+		assert.Error(t, err)
 	})
 }
 
@@ -1617,4 +1684,389 @@ func TestGithubClient_UploadSnapshotToDependencyGraph(t *testing.T) {
 	// Negative test: bad client
 	err = createBadGitHubClient(t).UploadSnapshotToDependencyGraph(ctx, owner, repo1, &snapshot)
 	assert.Error(t, err)
+}
+
+func TestParseOwnerAndRepoFromURL(t *testing.T) {
+	tests := []struct {
+		name        string
+		repoURL     string
+		wantOwner   string
+		wantRepo    string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:      "valid GitHub API URL",
+			repoURL:   "https://api.github.com/repos/or66/-jfrog-client-go-or",
+			wantOwner: "or66",
+			wantRepo:  "-jfrog-client-go-or",
+			wantErr:   false,
+		},
+		{
+			name:      "valid GitHub API URL with different owner",
+			repoURL:   "https://api.github.com/repos/Or-Geva/-jfrog-client-go-or",
+			wantOwner: "Or-Geva",
+			wantRepo:  "-jfrog-client-go-or",
+			wantErr:   false,
+		},
+		{
+			name:      "valid URL with org name",
+			repoURL:   "https://api.github.com/repos/jfrog/froggit-go",
+			wantOwner: "jfrog",
+			wantRepo:  "froggit-go",
+			wantErr:   false,
+		},
+		{
+			name:        "empty URL",
+			repoURL:     "",
+			wantOwner:   "",
+			wantRepo:    "",
+			wantErr:     true,
+			errContains: "empty",
+		},
+		{
+			name:        "invalid URL - too short",
+			repoURL:     "https://api.github.com",
+			wantOwner:   "",
+			wantRepo:    "",
+			wantErr:     true,
+			errContains: "could not extract",
+		},
+		{
+			name:        "invalid URL - single segment",
+			repoURL:     "owner",
+			wantOwner:   "",
+			wantRepo:    "",
+			wantErr:     true,
+			errContains: "invalid repository URL format",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner, repo, err := parseOwnerAndRepoFromURL(tt.repoURL)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.wantOwner, owner)
+				assert.Equal(t, tt.wantRepo, repo)
+			}
+		})
+	}
+}
+
+func TestMapGitHubIssuesToPullRequestInfoList(t *testing.T) {
+	// Create test data based on the real example provided
+	user1 := &github.User{Login: github.String("or66")}
+	user2 := &github.User{Login: github.String("Or-Geva")}
+
+	timestamp1 := github.Timestamp{Time: time.Now().Add(-1 * time.Hour)}
+	timestamp2 := github.Timestamp{Time: time.Now().Add(-2 * time.Hour)}
+
+	testIssues := []*github.Issue{
+		{
+			ID:     github.Int64(3528335420),
+			Number: github.Int(2),
+			State:  github.String("open"),
+			Title:  github.String("Update go.sum"),
+			Body:   github.String("PR description"),
+			User:   user1,
+			PullRequestLinks: &github.PullRequestLinks{
+				URL: github.String("https://api.github.com/repos/or66/-jfrog-client-go-or/pulls/2"),
+			},
+			RepositoryURL: github.String("https://api.github.com/repos/or66/-jfrog-client-go-or"),
+			CreatedAt:     &timestamp1,
+			UpdatedAt:     &timestamp2,
+		},
+		{
+			ID:     github.Int64(3528327274),
+			Number: github.Int(1),
+			State:  github.String("open"),
+			Title:  github.String("Update go.mod"),
+			Body:   github.String("Another PR"),
+			User:   user1,
+			PullRequestLinks: &github.PullRequestLinks{
+				URL: github.String("https://api.github.com/repos/or66/-jfrog-client-go-or/pulls/1"),
+			},
+			RepositoryURL: github.String("https://api.github.com/repos/or66/-jfrog-client-go-or"),
+			CreatedAt:     &timestamp1,
+			UpdatedAt:     &timestamp2,
+		},
+		{
+			ID:     github.Int64(1054647485),
+			Number: github.Int(4),
+			State:  github.String("open"),
+			Title:  github.String("Update README.md"),
+			Body:   github.String("README update"),
+			User:   user2,
+			PullRequestLinks: &github.PullRequestLinks{
+				URL: github.String("https://api.github.com/repos/Or-Geva/-jfrog-client-go-or/pulls/4"),
+			},
+			RepositoryURL: github.String("https://api.github.com/repos/Or-Geva/-jfrog-client-go-or"),
+			CreatedAt:     &timestamp1,
+			UpdatedAt:     &timestamp2,
+		},
+	}
+
+	t.Run("successfully parses repository URL from issues", func(t *testing.T) {
+		// This test verifies that parseOwnerAndRepoFromURL correctly extracts owner/repo
+		// from the RepositoryURL field when Repository field is nil
+		for _, issue := range testIssues {
+			owner, repo, err := parseOwnerAndRepoFromURL(issue.GetRepositoryURL())
+			assert.NoError(t, err)
+			assert.NotEmpty(t, owner)
+			assert.NotEmpty(t, repo)
+		}
+	})
+
+	t.Run("skips issues without PullRequestLinks", func(t *testing.T) {
+		// Test that the function correctly skips regular issues (not PRs)
+		testIssuesWithNonPR := append(testIssues, &github.Issue{
+			ID:               github.Int64(999),
+			Number:           github.Int(999),
+			State:            github.String("open"),
+			Title:            github.String("Regular issue"),
+			PullRequestLinks: nil, // Not a PR
+			RepositoryURL:    github.String("https://api.github.com/repos/or66/-jfrog-client-go-or"),
+		})
+
+		var prCount int
+		for _, issue := range testIssuesWithNonPR {
+			if issue.PullRequestLinks != nil {
+				prCount++
+			}
+		}
+		assert.Equal(t, 3, prCount, "Should have 3 PRs out of 4 issues")
+	})
+
+	t.Run("handles invalid repository URLs gracefully", func(t *testing.T) {
+		// Test that invalid URLs are handled without panicking
+		_, _, err := parseOwnerAndRepoFromURL("invalid-url")
+		assert.Error(t, err)
+
+		// Also test with an issue that has invalid RepositoryURL
+		invalidURLIssue := &github.Issue{
+			ID:               github.Int64(888),
+			Number:           github.Int(888),
+			State:            github.String("open"),
+			Title:            github.String("Invalid URL"),
+			PullRequestLinks: &github.PullRequestLinks{URL: github.String("https://example.com")},
+			RepositoryURL:    github.String("invalid-url"),
+		}
+		_, _, err = parseOwnerAndRepoFromURL(invalidURLIssue.GetRepositoryURL())
+		assert.Error(t, err)
+	})
+}
+
+func TestGitHubClient_GetCurrentUser(t *testing.T) {
+	ctx := context.Background()
+	expectedLogin := "testuser"
+	expectedID := int64(12345)
+	expectedName := "Test User"
+	expectedEmail := "testuser@example.com"
+	expectedAvatarURL := "https://avatars.githubusercontent.com/u/12345?v=4"
+
+	expectedUser := github.User{
+		Login:     &expectedLogin,
+		ID:        &expectedID,
+		Name:      &expectedName,
+		Email:     &expectedEmail,
+		AvatarURL: &expectedAvatarURL,
+	}
+
+	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, expectedUser, "/user", createGitHubHandler)
+	defer cleanUp()
+
+	userInfo, err := client.GetCurrentUser(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedLogin, userInfo.Login)
+	assert.Equal(t, expectedID, userInfo.ID)
+	assert.Equal(t, expectedName, userInfo.Name)
+	assert.Equal(t, expectedEmail, userInfo.Email)
+	assert.Equal(t, expectedAvatarURL, userInfo.AvatarURL)
+
+	_, err = createBadGitHubClient(t).GetCurrentUser(ctx)
+	assert.Error(t, err)
+}
+
+func TestGitHubClient_GetUser(t *testing.T) {
+	ctx := context.Background()
+	username := "octocat"
+	expectedLogin := "octocat"
+	expectedID := int64(54321)
+	expectedName := "The Octocat"
+	expectedEmail := "octocat@github.com"
+	expectedAvatarURL := "https://avatars.githubusercontent.com/u/54321?v=4"
+
+	expectedUser := github.User{
+		Login:     &expectedLogin,
+		ID:        &expectedID,
+		Name:      &expectedName,
+		Email:     &expectedEmail,
+		AvatarURL: &expectedAvatarURL,
+	}
+
+	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, expectedUser, fmt.Sprintf("/users/%s", username), createGitHubHandler)
+	defer cleanUp()
+
+	userInfo, err := client.GetUser(ctx, username)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedLogin, userInfo.Login)
+	assert.Equal(t, expectedID, userInfo.ID)
+	assert.Equal(t, expectedName, userInfo.Name)
+	assert.Equal(t, expectedEmail, userInfo.Email)
+	assert.Equal(t, expectedAvatarURL, userInfo.AvatarURL)
+
+	_, err = createBadGitHubClient(t).GetUser(ctx, username)
+	assert.Error(t, err)
+
+	// Test with blank username
+	_, err = client.GetUser(ctx, "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "username")
+}
+
+// createGitHubSearchHandler creates a handler for GitHub Search API endpoints
+func createGitHubSearchHandler(t *testing.T, expectedQuery string, response []byte, expectedStatusCode int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/search/issues", r.URL.Path)
+		assert.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+
+		query := r.URL.Query().Get("q")
+		if expectedQuery != "" {
+			assert.Equal(t, expectedQuery, query)
+		}
+
+		w.WriteHeader(expectedStatusCode)
+		_, err := w.Write(response)
+		assert.NoError(t, err)
+	}
+}
+
+func TestGitHubClient_ListPullRequestsByUser(t *testing.T) {
+	ctx := context.Background()
+	username := "octocat"
+
+	t.Run("Success with results", func(t *testing.T) {
+		response, err := os.ReadFile(filepath.Join("testdata", "github", "search_issues_by_author_response.json"))
+		assert.NoError(t, err)
+
+		expectedQuery := fmt.Sprintf("type:pr author:%s state:open", username)
+		client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, response,
+			"/search/issues", func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
+				return createGitHubSearchHandler(t, expectedQuery, response, expectedStatusCode)
+			})
+		defer cleanUp()
+
+		result, err := client.ListPullRequestsByUser(ctx, username)
+		assert.NoError(t, err)
+		assert.Len(t, result, 2)
+		assert.Equal(t, 1347, result[0].Number)
+		assert.Equal(t, "Amazing new feature", result[0].Title)
+		assert.Equal(t, "octocat", result[0].Author)
+		assert.Equal(t, "https://github.com/octocat/Hello-World/pull/1347", result[0].URL)
+	})
+
+	t.Run("Empty results", func(t *testing.T) {
+		response, err := os.ReadFile(filepath.Join("testdata", "github", "search_issues_empty_response.json"))
+		assert.NoError(t, err)
+
+		client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, response,
+			"/search/issues", func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
+				return createGitHubSearchHandler(t, "", response, expectedStatusCode)
+			})
+		defer cleanUp()
+
+		result, err := client.ListPullRequestsByUser(ctx, "nouser")
+		assert.NoError(t, err)
+		assert.Len(t, result, 0)
+	})
+
+	t.Run("Error - Bad client", func(t *testing.T) {
+		_, err := createBadGitHubClient(t).ListPullRequestsByUser(ctx, username)
+		assert.Error(t, err)
+	})
+
+	t.Run("Error - 422 Validation Failed", func(t *testing.T) {
+		errorResponse := []byte(`{
+			"message": "Validation Failed",
+			"errors": [{"message": "The listed users and repositories cannot be searched"}]
+		}`)
+
+		client, cleanUp := createServerAndClientReturningStatus(t, vcsutils.GitHub, false,
+			errorResponse, "/search/issues", http.StatusUnprocessableEntity,
+			func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
+				return createGitHubSearchHandler(t, "", response, expectedStatusCode)
+			})
+		defer cleanUp()
+
+		_, err := client.ListPullRequestsByUser(ctx, "invalid-user")
+		assert.Error(t, err)
+	})
+}
+
+func TestGitHubClient_ListPullRequestsByReviewer(t *testing.T) {
+	ctx := context.Background()
+	username := "reviewer-user"
+
+	t.Run("Success with results", func(t *testing.T) {
+		response, err := os.ReadFile(filepath.Join("testdata", "github", "search_issues_by_reviewer_response.json"))
+		assert.NoError(t, err)
+
+		expectedQuery := fmt.Sprintf("type:pr state:open review-requested:%s", username)
+		client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, response,
+			"/search/issues", func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
+				return createGitHubSearchHandler(t, expectedQuery, response, expectedStatusCode)
+			})
+		defer cleanUp()
+
+		result, err := client.ListPullRequestsByReviewer(ctx, username)
+		assert.NoError(t, err)
+		assert.Len(t, result, 1)
+		assert.Equal(t, 456, result[0].Number)
+		assert.Equal(t, "Fix critical bug", result[0].Title)
+		assert.Equal(t, "author-user", result[0].Author)
+	})
+
+	t.Run("Empty results - user not a reviewer", func(t *testing.T) {
+		response, err := os.ReadFile(filepath.Join("testdata", "github", "search_issues_empty_response.json"))
+		assert.NoError(t, err)
+
+		client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, response,
+			"/search/issues", func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
+				return createGitHubSearchHandler(t, "", response, expectedStatusCode)
+			})
+		defer cleanUp()
+
+		result, err := client.ListPullRequestsByReviewer(ctx, "not-a-reviewer")
+		assert.NoError(t, err)
+		assert.Len(t, result, 0)
+	})
+
+	t.Run("Error - Bad client", func(t *testing.T) {
+		_, err := createBadGitHubClient(t).ListPullRequestsByReviewer(ctx, username)
+		assert.Error(t, err)
+	})
+
+	t.Run("Error - 422 Validation Failed", func(t *testing.T) {
+		errorResponse := []byte(`{
+			"message": "Validation Failed",
+			"errors": [{"message": "Invalid review-requested query"}]
+		}`)
+
+		client, cleanUp := createServerAndClientReturningStatus(t, vcsutils.GitHub, false,
+			errorResponse, "/search/issues", http.StatusUnprocessableEntity,
+			func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
+				return createGitHubSearchHandler(t, "", response, expectedStatusCode)
+			})
+		defer cleanUp()
+
+		_, err := client.ListPullRequestsByReviewer(ctx, "invalid-user")
+		assert.Error(t, err)
+	})
 }

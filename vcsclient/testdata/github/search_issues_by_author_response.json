@@ -1,0 +1,36 @@
+{
+  "total_count": 2,
+  "incomplete_results": false,
+  "items": [
+    {
+      "id": 1,
+      "number": 1347,
+      "title": "Amazing new feature",
+      "state": "open",
+      "html_url": "https://github.com/octocat/Hello-World/pull/1347",
+      "body": "Please pull these changes",
+      "user": {
+        "login": "octocat"
+      },
+      "repository_url": "https://api.github.com/repos/octocat/Hello-World",
+      "pull_request": {
+        "url": "https://api.github.com/repos/octocat/Hello-World/pulls/1347"
+      }
+    },
+    {
+      "id": 2,
+      "number": 1348,
+      "title": "Another PR",
+      "state": "open",
+      "html_url": "https://github.com/octocat/Hello-World/pull/1348",
+      "body": "More changes",
+      "user": {
+        "login": "octocat"
+      },
+      "repository_url": "https://api.github.com/repos/octocat/Hello-World",
+      "pull_request": {
+        "url": "https://api.github.com/repos/octocat/Hello-World/pulls/1348"
+      }
+    }
+  ]
+}

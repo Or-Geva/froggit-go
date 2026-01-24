@@ -274,7 +274,7 @@ func TestAzureRepos_TestListOpenPullRequests(t *testing.T) {
 	assert.NoError(t, err)
 	assert.EqualValues(t, pullRequestsInfo, []PullRequestInfo{
 		{
-			ID:     1,
+			Number:     1,
 			Title:  testTitle,
 			Author: "user",
 			Source: BranchInfo{Name: branch1, Repository: repo1},
@@ -318,7 +318,7 @@ func TestAzureRepos_TestListOpenPullRequests(t *testing.T) {
 	assert.NoError(t, err)
 	assert.EqualValues(t, pullRequestsInfo, []PullRequestInfo{
 		{
-			ID:     1,
+			Number:     1,
 			Title:  testTitle,
 			Author: "user",
 			Body:   prBody,
@@ -365,7 +365,7 @@ func TestAzureReposClient_GetPullRequest(t *testing.T) {
 	pullRequestsInfo, err := client.GetPullRequestByID(ctx, owner, repoName, pullRequestId)
 	assert.NoError(t, err)
 	assert.EqualValues(t, pullRequestsInfo, PullRequestInfo{
-		ID:     1,
+		Number:     1,
 		Source: BranchInfo{Name: sourceName, Repository: repoName, Owner: forkedOwner},
 		Target: BranchInfo{Name: targetName, Repository: repoName, Owner: owner},
 		URL:    url,
@@ -392,7 +392,7 @@ func TestAzureReposClient_GetPullRequest(t *testing.T) {
 	pullRequestsInfo, err = client.GetPullRequestByID(ctx, owner, repoName, pullRequestId)
 	assert.NoError(t, err)
 	assert.EqualValues(t, pullRequestsInfo, PullRequestInfo{
-		ID:     1,
+		Number:     1,
 		Source: BranchInfo{Name: sourceName, Repository: repoName, Owner: ""},
 		Target: BranchInfo{Name: targetName, Repository: repoName, Owner: owner},
 		URL:    url,

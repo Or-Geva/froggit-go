@@ -308,6 +308,21 @@ func (client *GitLabClient) GetPullRequestByID(_ context.Context, owner, reposit
 	return
 }
 
+// ListPullRequestsByUser on GitLab
+func (client *GitLabClient) ListPullRequestsByUser(_ context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByUser is not implemented for GitLab")
+}
+
+// ListPullRequestsByReviewer on GitLab
+func (client *GitLabClient) ListPullRequestsByReviewer(_ context.Context, username string) ([]PullRequestInfo, error) {
+	return nil, errors.New("ListPullRequestsByReviewer is not implemented for GitLab")
+}
+
+// GetPullRequestDiff returns detailed file changes including diff content for a pull request
+func (client *GitLabClient) GetPullRequestDiff(ctx context.Context, owner, repository string, pullRequestID int) ([]FileChange, error) {
+	return nil, errors.New("GetPullRequestDiff is not yet implemented for GitLab")
+}
+
 // AddPullRequestComment on GitLab
 func (client *GitLabClient) AddPullRequestComment(ctx context.Context, owner, repository, content string, pullRequestID int) error {
 	err := validateParametersNotBlank(map[string]string{"owner": owner, "repository": repository, "content": content})
@@ -922,7 +937,7 @@ func (client *GitLabClient) mapGitLabMergeRequestToPullRequestInfo(mergeRequest 
 	}
 
 	return PullRequestInfo{
-		ID:     int64(mergeRequest.IID),
+		Number: mergeRequest.IID,
 		Title:  mergeRequest.Title,
 		Body:   body,
 		Author: mergeRequest.Author.Username,
@@ -967,4 +982,37 @@ func mapGitLabPullRequestState(state *vcsutils.PullRequestState) *string {
 		return nil
 	}
 	return &stateStringValue
+}
+
+// GetCurrentUser Gets the currently authenticated user information
+func (client *GitLabClient) GetCurrentUser(ctx context.Context) (UserInfo, error) {
+	return UserInfo{}, fmt.Errorf("GetCurrentUser is not currently supported for GitLab")
+}
+
+// GetUser Gets user information by username on GitLab
+func (client *GitLabClient) GetUser(ctx context.Context, username string) (UserInfo, error) {
+	err := validateParametersNotBlank(map[string]string{"username": username})
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	users, _, err := client.glClient.Users.ListUsers(&gitlab.ListUsersOptions{
+		Username: &username,
+	})
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	if len(users) == 0 {
+		return UserInfo{}, fmt.Errorf("user '%s' not found", username)
+	}
+
+	user := users[0]
+	return UserInfo{
+		Login:     user.Username,
+		ID:        int64(user.ID),
+		Name:      user.Name,
+		Email:     user.Email,
+		AvatarURL: user.AvatarURL,
+	}, nil
 }
