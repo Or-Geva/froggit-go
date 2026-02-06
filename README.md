@@ -343,16 +343,51 @@ for _, review := range reviews {
     // Top-level comments (comments that are not replies)
     for _, comment := range review.Comments {
         fmt.Printf("  Comment ID: %d\n", comment.ID)
-        fmt.Printf("  Author: %s\n", comment.Author)
         fmt.Printf("  Body: %s\n", comment.Body)
         fmt.Printf("  File: %s:%d\n", comment.Path, comment.Line)
-        fmt.Printf("  URL: %s\n", comment.URL)
+
+        // Display reactions if present (GitHub only)
+        if comment.Reactions.TotalCount > 0 {
+            fmt.Printf("  Total Reactions: %d\n", comment.Reactions.TotalCount)
+            if comment.Reactions.PlusOne > 0 {
+                fmt.Printf("    👍 +1: %d\n", comment.Reactions.PlusOne)
+            }
+            if comment.Reactions.MinusOne > 0 {
+                fmt.Printf("    👎 -1: %d\n", comment.Reactions.MinusOne)
+            }
+            if comment.Reactions.Laugh > 0 {
+                fmt.Printf("    😄 Laugh: %d\n", comment.Reactions.Laugh)
+            }
+            if comment.Reactions.Confused > 0 {
+                fmt.Printf("    😕 Confused: %d\n", comment.Reactions.Confused)
+            }
+            if comment.Reactions.Heart > 0 {
+                fmt.Printf("    ❤️ Heart: %d\n", comment.Reactions.Heart)
+            }
+            if comment.Reactions.Hooray > 0 {
+                fmt.Printf("    🎉 Hooray: %d\n", comment.Reactions.Hooray)
+            }
+            if comment.Reactions.Rocket > 0 {
+                fmt.Printf("    🚀 Rocket: %d\n", comment.Reactions.Rocket)
+            }
+            if comment.Reactions.Eyes > 0 {
+                fmt.Printf("    👀 Eyes: %d\n", comment.Reactions.Eyes)
+            }
+        }
 
         // Nested replies to this comment
         for _, reply := range comment.Replies {
-            fmt.Printf("    Reply ID: %d by %s\n", reply.ID, reply.Author)
+            fmt.Printf("    Reply ID: %d by %s\n", reply.ID, reply.Reviewer)
             fmt.Printf("    Body: %s\n", reply.Body)
-            fmt.Printf("    Avatar: %s\n", reply.AvatarURL)
+            fmt.Printf("    URL: %s\n", reply.URL)
+
+            // Access reply comment details and reactions
+            for _, replyComment := range reply.Comments {
+                if replyComment.Reactions.TotalCount > 0 {
+                    fmt.Printf("      Reply has %d total reactions\n", replyComment.Reactions.TotalCount)
+                    // All reaction types available: PlusOne, MinusOne, Laugh, Confused, Heart, Hooray, Rocket, Eyes
+                }
+            }
         }
     }
 }
@@ -383,6 +418,7 @@ type ReviewCommentDetails struct {
     StartLine int                            // Start line for multi-line comments
     Side      string                         // "LEFT" or "RIGHT" side of the diff
     CreatedAt time.Time                      // Creation timestamp
+    Reactions ReactionInfo                   // Reaction counts (GitHub only)
     Replies   []PullRequestReviewDetails     // Nested replies to this comment (GitHub only)
 }
 ```

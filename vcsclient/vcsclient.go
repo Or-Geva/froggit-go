@@ -555,6 +555,7 @@ type ReviewCommentDetails struct {
 	StartLine int
 	Side      string
 	CreatedAt time.Time
+	Reactions ReactionInfo               // Reaction counts (GitHub only)
 	Replies   []PullRequestReviewDetails // Nested replies to this comment
 }
 

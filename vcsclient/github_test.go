@@ -899,13 +899,27 @@ func TestGitHubClient_ListPullRequestReviews(t *testing.T) {
 	topComment := review.Comments[0]
 	assert.Equal(t, int64(8), topComment.ID)
 	assert.Equal(t, "Please change this line", topComment.Body)
+	// Verify reactions for top comment (from test data)
+	assert.Equal(t, 3, topComment.Reactions.PlusOne)
+	assert.Equal(t, 1, topComment.Reactions.Heart)
+	assert.Equal(t, 4, topComment.Reactions.TotalCount)
 
 	// Verify nested replies
 	assert.Len(t, topComment.Replies, 2, "Top comment should have 2 replies")
 	assert.Equal(t, int64(10), topComment.Replies[0].ID)
 	assert.Equal(t, "Great stuff!", topComment.Replies[0].Body)
+	// Verify reactions for reply 1
+	assert.Equal(t, 5, topComment.Replies[0].Comments[0].Reactions.PlusOne)
+	assert.Equal(t, 2, topComment.Replies[0].Comments[0].Reactions.Laugh)
+	assert.Equal(t, 3, topComment.Replies[0].Comments[0].Reactions.Heart)
+	assert.Equal(t, 17, topComment.Replies[0].Comments[0].Reactions.TotalCount)
+
 	assert.Equal(t, int64(11), topComment.Replies[1].ID)
 	assert.Equal(t, "LGTM", topComment.Replies[1].Body)
+	// Verify reactions for reply 2
+	assert.Equal(t, 10, topComment.Replies[1].Comments[0].Reactions.PlusOne)
+	assert.Equal(t, 1, topComment.Replies[1].Comments[0].Reactions.MinusOne)
+	assert.Equal(t, 12, topComment.Replies[1].Comments[0].Reactions.TotalCount)
 
 	_, err = createBadGitHubClient(t).ListPullRequestReviews(ctx, owner, repo1, 1)
 	assert.Error(t, err)
@@ -944,6 +958,11 @@ func Test_buildCommentTree(t *testing.T) {
 				AvatarURL: github.String("https://avatars.githubusercontent.com/u/1"),
 			},
 			HTMLURL: github.String("https://github.com/repo/pull/1#discussion_r1"),
+			Reactions: &github.Reactions{
+				PlusOne:    github.Int(3),
+				Heart:      github.Int(1),
+				TotalCount: github.Int(4),
+			},
 		},
 		{
 			ID:                   &comment2ID,
@@ -961,6 +980,12 @@ func Test_buildCommentTree(t *testing.T) {
 				AvatarURL: github.String("https://avatars.githubusercontent.com/u/2"),
 			},
 			HTMLURL: github.String("https://github.com/repo/pull/1#discussion_r2"),
+			Reactions: &github.Reactions{
+				PlusOne:    github.Int(5),
+				Rocket:     github.Int(2),
+				Eyes:       github.Int(1),
+				TotalCount: github.Int(8),
+			},
 		},
 		{
 			ID:                   &comment3ID,
@@ -978,6 +1003,11 @@ func Test_buildCommentTree(t *testing.T) {
 				AvatarURL: github.String("https://avatars.githubusercontent.com/u/3"),
 			},
 			HTMLURL: github.String("https://github.com/repo/pull/1#discussion_r3"),
+			Reactions: &github.Reactions{
+				Laugh:      github.Int(2),
+				Confused:   github.Int(1),
+				TotalCount: github.Int(3),
+			},
 		},
 	}
 
@@ -1000,6 +1030,10 @@ func Test_buildCommentTree(t *testing.T) {
 	assert.Equal(t, "hi", comment1Detail.Body)
 	assert.Equal(t, "LICENSE", comment1Detail.Path)
 	assert.Len(t, comment1Detail.Replies, 0, "Comment 1 should have no replies")
+	// Verify reactions for comment 1
+	assert.Equal(t, 3, comment1Detail.Reactions.PlusOne)
+	assert.Equal(t, 1, comment1Detail.Reactions.Heart)
+	assert.Equal(t, 4, comment1Detail.Reactions.TotalCount)
 
 	// Verify comment 2 (parent comment with reply)
 	comment2Detail := globalCommentMap[comment2ID]
@@ -1007,6 +1041,11 @@ func Test_buildCommentTree(t *testing.T) {
 	assert.Equal(t, comment2ID, comment2Detail.ID)
 	assert.Equal(t, "Add tests", comment2Detail.Body)
 	assert.Len(t, comment2Detail.Replies, 1, "Comment 2 should have 1 reply")
+	// Verify reactions for comment 2
+	assert.Equal(t, 5, comment2Detail.Reactions.PlusOne)
+	assert.Equal(t, 2, comment2Detail.Reactions.Rocket)
+	assert.Equal(t, 1, comment2Detail.Reactions.Eyes)
+	assert.Equal(t, 8, comment2Detail.Reactions.TotalCount)
 
 	// Verify comment 3 is nested under comment 2 as a PullRequestReviewDetails
 	reply := comment2Detail.Replies[0]
@@ -1017,6 +1056,10 @@ func Test_buildCommentTree(t *testing.T) {
 	assert.Len(t, reply.Comments, 1, "Reply should have 1 comment in Comments array")
 	assert.Equal(t, comment3ID, reply.Comments[0].ID, "Reply's comment should match the reply ID")
 	assert.Equal(t, "What tests?", reply.Comments[0].Body, "Reply's comment body should match")
+	// Verify reactions for comment 3 (the reply)
+	assert.Equal(t, 2, reply.Comments[0].Reactions.Laugh)
+	assert.Equal(t, 1, reply.Comments[0].Reactions.Confused)
+	assert.Equal(t, 3, reply.Comments[0].Reactions.TotalCount)
 
 	// Verify comment 3 is NOT in global map (it's a reply, should only exist nested)
 	comment3Detail := globalCommentMap[comment3ID]

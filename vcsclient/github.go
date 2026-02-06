@@ -713,6 +713,22 @@ func buildCommentTree(allComments []*github.PullRequestComment) (commentsByRevie
 	tempCommentMap := make(map[int64]*ReviewCommentDetails)
 	for _, comment := range allComments {
 		if comment.GetPullRequestReviewID() != 0 {
+			// Map reactions from GitHub API
+			reactions := ReactionInfo{}
+			if r := comment.GetReactions(); r != nil {
+				reactions = ReactionInfo{
+					PlusOne:    r.GetPlusOne(),
+					MinusOne:   r.GetMinusOne(),
+					Laugh:      r.GetLaugh(),
+					Confused:   r.GetConfused(),
+					Heart:      r.GetHeart(),
+					Hooray:     r.GetHooray(),
+					Rocket:     r.GetRocket(),
+					Eyes:       r.GetEyes(),
+					TotalCount: r.GetTotalCount(),
+				}
+			}
+
 			detail := &ReviewCommentDetails{
 				ID:        comment.GetID(),
 				Body:      comment.GetBody(),
@@ -722,6 +738,7 @@ func buildCommentTree(allComments []*github.PullRequestComment) (commentsByRevie
 				StartLine: comment.GetStartLine(),
 				Side:      comment.GetSide(),
 				CreatedAt: comment.GetCreatedAt().Time,
+				Reactions: reactions,
 				Replies:   []PullRequestReviewDetails{},
 			}
 			tempCommentMap[comment.GetID()] = detail
