@@ -499,11 +499,23 @@ func (client *BitbucketServerClient) ListPullRequestComments(ctx context.Context
 		for _, activity := range activities.Values {
 			// Add activity only if from type new comment.
 			if activity.Action == "COMMENTED" && activity.CommentAction == "ADDED" {
+				author := UserInfo{
+					Login: activity.Comment.Author.Name,
+					ID:    int64(activity.Comment.Author.ID),
+					Name:  activity.Comment.Author.DisplayName,
+					Email: activity.Comment.Author.EmailAddress,
+				}
+
 				results = append(results, CommentInfo{
 					ID:      int64(activity.Comment.ID),
 					Created: time.Unix(activity.Comment.CreatedDate, 0),
 					Content: activity.Comment.Text,
 					Version: activity.Comment.Version,
+					Author:  author,
+					// Bitbucket Server doesn't have reactions, author association, or direct comment URLs
+					Reactions:         ReactionInfo{},
+					AuthorAssociation: "",
+					URL:               "",
 				})
 			}
 		}

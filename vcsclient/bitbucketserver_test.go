@@ -339,6 +339,12 @@ func TestBitbucketServer_ListPullRequestComments(t *testing.T) {
 		Content: "A measured reply.",
 		Created: time.Unix(1548720847370, 0),
 		Version: 1,
+		Author: UserInfo{
+			Login: "jcitizen",
+			ID:    101,
+			Name:  "Jane Citizen",
+			Email: "jane@example.com",
+		},
 	}, result[0])
 }
 

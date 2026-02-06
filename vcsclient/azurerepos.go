@@ -298,6 +298,7 @@ func (client *AzureReposClient) ListPullRequestReviews(ctx context.Context, owne
 			ID:       id,
 			Reviewer: *reviewer.DisplayName,
 			State:    mapVoteToState(*reviewer.Vote),
+			URL:      "", // Azure Repos reviewers don't have a direct HTML URL
 		})
 	}
 
@@ -333,10 +334,21 @@ func (client *AzureReposClient) ListPullRequestComments(ctx context.Context, _, 
 			continue
 		}
 		var commentsAggregator strings.Builder
-		for _, comment := range *thread.Comments {
+		var threadAuthor UserInfo
+
+		for i, comment := range *thread.Comments {
 			if comment.IsDeleted != nil && *comment.IsDeleted {
 				continue
 			}
+
+			// Use the first comment's author as the thread author
+			if i == 0 && comment.Author != nil {
+				threadAuthor = UserInfo{
+					Name: *comment.Author.DisplayName,
+					// Azure Repos doesn't provide login, ID, email, or avatar in the comment author
+				}
+			}
+
 			_, err = commentsAggregator.WriteString(
 				fmt.Sprintf("Author: %s, Id: %d, Content:%s\n",
 					*comment.Author.DisplayName,
@@ -350,6 +362,11 @@ func (client *AzureReposClient) ListPullRequestComments(ctx context.Context, _, 
 			ID:      int64(*thread.Id),
 			Created: thread.PublishedDate.Time,
 			Content: commentsAggregator.String(),
+			Author:  threadAuthor,
+			// Azure Repos doesn't have reactions, author association, or direct comment URLs
+			Reactions:         ReactionInfo{},
+			AuthorAssociation: "",
+			URL:               "",
 		})
 	}
 	return commentInfo, nil

@@ -498,12 +498,28 @@ type UserInfo struct {
 	AvatarURL string
 }
 
+type ReactionInfo struct {
+	PlusOne   int
+	MinusOne  int
+	Laugh     int
+	Confused  int
+	Heart     int
+	Hooray    int
+	Rocket    int
+	Eyes      int
+	TotalCount int
+}
+
 type CommentInfo struct {
-	ID       int64
-	ThreadID string
-	Content  string
-	Created  time.Time
-	Version  int
+	ID                int64
+	ThreadID          string
+	Content           string
+	Created           time.Time
+	Version           int
+	Author            UserInfo
+	Reactions         ReactionInfo
+	AuthorAssociation string
+	URL               string
 }
 
 type PullRequestInfo struct {
@@ -526,6 +542,7 @@ type PullRequestReviewDetails struct {
 	CommitID    string
 	State       string
 	Comments    []ReviewCommentDetails
+	URL         string
 }
 
 // ReviewCommentDetails contains information about an inline review comment with its diff context

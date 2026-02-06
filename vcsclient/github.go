@@ -768,6 +768,7 @@ func (client *GitHubClient) ListPullRequestReviews(ctx context.Context, owner, r
 			State:       review.GetState(),
 			SubmittedAt: review.GetSubmittedAt().String(),
 			CommitID:    review.GetCommitID(),
+			URL:         review.GetHTMLURL(),
 		}
 
 		// Add associated review comments with diff context
@@ -1848,10 +1849,40 @@ func mapGitHubCommitToCommitInfo(commit *github.RepositoryCommit) CommitInfo {
 
 func mapGitHubIssuesCommentToCommentInfoList(commentsList []*github.IssueComment) (res []CommentInfo, err error) {
 	for _, comment := range commentsList {
+		author := UserInfo{}
+		if user := comment.GetUser(); user != nil {
+			author = UserInfo{
+				Login:     user.GetLogin(),
+				ID:        user.GetID(),
+				Name:      user.GetName(),
+				Email:     user.GetEmail(),
+				AvatarURL: user.GetAvatarURL(),
+			}
+		}
+
+		reactions := ReactionInfo{}
+		if r := comment.GetReactions(); r != nil {
+			reactions = ReactionInfo{
+				PlusOne:    r.GetPlusOne(),
+				MinusOne:   r.GetMinusOne(),
+				Laugh:      r.GetLaugh(),
+				Confused:   r.GetConfused(),
+				Heart:      r.GetHeart(),
+				Hooray:     r.GetHooray(),
+				Rocket:     r.GetRocket(),
+				Eyes:       r.GetEyes(),
+				TotalCount: r.GetTotalCount(),
+			}
+		}
+
 		res = append(res, CommentInfo{
-			ID:      comment.GetID(),
-			Content: comment.GetBody(),
-			Created: comment.GetCreatedAt().Time,
+			ID:                comment.GetID(),
+			Content:           comment.GetBody(),
+			Created:           comment.GetCreatedAt().Time,
+			Author:            author,
+			Reactions:         reactions,
+			AuthorAssociation: comment.GetAuthorAssociation(),
+			URL:               comment.GetHTMLURL(),
 		})
 	}
 	return

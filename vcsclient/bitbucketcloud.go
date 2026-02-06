@@ -477,6 +477,7 @@ func (client *BitbucketCloudClient) ListPullRequestReviews(ctx context.Context, 
 			SubmittedAt: comment.Created.Format(time.RFC3339),
 			CommitID:    "", // Bitbucket Cloud comments do not have a commit ID
 			Comments:    []ReviewCommentDetails{}, // Inline comment context not available in current implementation
+			URL:         comment.Links.HTML.Href,
 		})
 	}
 
@@ -802,6 +803,11 @@ type commentDetails struct {
 	IsDeleted bool           `json:"deleted"`
 	Content   commentContent `json:"content"`
 	Created   time.Time      `json:"created_on"`
+	Links     struct {
+		HTML struct {
+			Href string `json:"href"`
+		} `json:"html"`
+	} `json:"links"`
 }
 
 type commentContent struct {
@@ -829,6 +835,14 @@ type commitDetails struct {
 
 type user struct {
 	DisplayName string `json:"display_name"`
+	Nickname    string `json:"nickname"`
+	AccountID   string `json:"account_id"`
+	UUID        string `json:"uuid"`
+	Links       struct {
+		Avatar struct {
+			Href string `json:"href"`
+		} `json:"avatar"`
+	} `json:"links"`
 }
 type link struct {
 	Href string `json:"href"`
@@ -905,10 +919,21 @@ func mapBitbucketCloudCommitToCommitInfo(parsedCommit commitDetails) CommitInfo 
 func mapBitbucketCloudCommentToCommentInfo(parsedComments *commentsResponse) []CommentInfo {
 	comments := make([]CommentInfo, len(parsedComments.Values))
 	for i, comment := range parsedComments.Values {
+		author := UserInfo{
+			Login:     comment.User.Nickname,
+			Name:      comment.User.DisplayName,
+			AvatarURL: comment.User.Links.Avatar.Href,
+		}
+
 		comments[i] = CommentInfo{
 			ID:      comment.ID,
 			Content: comment.Content.Raw,
 			Created: comment.Created,
+			Author:  author,
+			// Bitbucket Cloud doesn't have reactions or author association
+			Reactions:         ReactionInfo{},
+			AuthorAssociation: "",
+			URL:               comment.Links.HTML.Href,
 		}
 	}
 	return comments

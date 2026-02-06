@@ -322,7 +322,7 @@ func TestGitHubClient_ListPullRequestReviewComments(t *testing.T) {
 	id := int64(1)
 	body := "test"
 	created := time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
-	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, []*github.PullRequestComment{{ID: &id, Body: &body, CreatedAt: &github.Timestamp{Time: created}}}, "/repos/jfrog/repo-1/pulls/1/comments", createGitHubHandler)
+	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, []*github.PullRequestComment{{ID: &id, Body: &body, CreatedAt: &github.Timestamp{Time: created}}}, "/repos/jfrog/repo-1/pulls/1/comments", createGitHubHandlerForUnknownUrl)
 	defer cleanUp()
 
 	commentInfo, err := client.ListPullRequestReviewComments(ctx, owner, repo1, 1)
@@ -760,19 +760,66 @@ func TestGitHubClient_ListPullRequestComments(t *testing.T) {
 	response, err := os.ReadFile(filepath.Join("testdata", "github", "pull_request_comments_list_response.json"))
 	assert.NoError(t, err)
 	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, response,
-		fmt.Sprintf("/repos/%s/%s/issues/1/comments", owner, repo1), createGitHubHandler)
+		fmt.Sprintf("/repos/%s/%s/issues/1/comments", owner, repo1), createGitHubHandlerForUnknownUrl)
 	defer cleanUp()
 
 	result, err := client.ListPullRequestComments(ctx, owner, repo1, 1)
 	assert.NoError(t, err)
 	assert.Len(t, result, 2)
+
+	// Test first comment with all enriched fields
 	expectedCreated, err := time.Parse(time.RFC3339, "2011-04-14T16:00:49Z")
 	assert.NoError(t, err)
 	assert.Equal(t, CommentInfo{
 		ID:      10,
 		Content: "Great stuff!",
 		Created: expectedCreated,
+		Author: UserInfo{
+			Login:     "octocat",
+			ID:        1,
+			AvatarURL: "https://github.com/images/error/octocat_happy.gif",
+		},
+		Reactions: ReactionInfo{
+			PlusOne:    5,
+			MinusOne:   0,
+			Laugh:      2,
+			Confused:   0,
+			Heart:      3,
+			Hooray:     1,
+			Rocket:     4,
+			Eyes:       2,
+			TotalCount: 17,
+		},
+		AuthorAssociation: "CONTRIBUTOR",
+		URL:               "https://github.com/octocat/Hello-World/pull/1#discussion-diff-1",
 	}, result[0])
+
+	// Test second comment
+	expectedCreated2, err := time.Parse(time.RFC3339, "2011-04-14T16:01:49Z")
+	assert.NoError(t, err)
+	assert.Equal(t, CommentInfo{
+		ID:      11,
+		Content: "LGTM",
+		Created: expectedCreated2,
+		Author: UserInfo{
+			Login:     "octocat",
+			ID:        1,
+			AvatarURL: "https://github.com/images/error/octocat_happy.gif",
+		},
+		Reactions: ReactionInfo{
+			PlusOne:    10,
+			MinusOne:   1,
+			Laugh:      0,
+			Confused:   0,
+			Heart:      0,
+			Hooray:     0,
+			Rocket:     0,
+			Eyes:       1,
+			TotalCount: 12,
+		},
+		AuthorAssociation: "MEMBER",
+		URL:               "https://github.com/octocat/Hello-World/pull/1#discussion-diff-1",
+	}, result[1])
 
 	_, err = createBadGitHubClient(t).ListPullRequestComments(ctx, owner, repo1, 1)
 	assert.Error(t, err)
@@ -782,8 +829,26 @@ func TestGitHubClient_ListPullRequestReviews(t *testing.T) {
 	ctx := context.Background()
 	response, err := os.ReadFile(filepath.Join("testdata", "github", "pull_request_reviews_response.json"))
 	assert.NoError(t, err)
+
+	// Create a handler that returns reviews for /reviews and empty array for /comments
+	handler := func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+
+			// Return empty array for comments endpoint, reviews response for reviews endpoint
+			if strings.Contains(r.RequestURI, "/comments") {
+				_, err := w.Write([]byte("[]"))
+				assert.NoError(t, err)
+			} else {
+				_, err := w.Write(response)
+				assert.NoError(t, err)
+			}
+		}
+	}
+
 	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, response,
-		fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo1, 1), createGitHubHandler)
+		fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo1, 1), handler)
 	defer cleanUp()
 
 	result, err := client.ListPullRequestReviews(ctx, owner, repo1, 1)
@@ -796,6 +861,7 @@ func TestGitHubClient_ListPullRequestReviews(t *testing.T) {
 		SubmittedAt: "2019-11-17 17:43:43 +0000 UTC",
 		CommitID:    "ecdd80bb57125d7ba9641ffaa4d7d2c19d3f3091",
 		State:       "CHANGES_REQUESTED",
+		URL:         "https://github.com/octocat/Hello-World/pull/12#pullrequestreview-80",
 	}, result[0])
 
 	_, err = createBadGitHubClient(t).ListPullRequestReviews(ctx, owner, repo1, 1)
@@ -2068,5 +2134,181 @@ func TestGitHubClient_ListPullRequestsByReviewer(t *testing.T) {
 
 		_, err := client.ListPullRequestsByReviewer(ctx, "invalid-user")
 		assert.Error(t, err)
+	})
+}
+
+func TestMapGitHubIssuesCommentToCommentInfoList(t *testing.T) {
+	t.Run("Maps all comment fields including reactions and author", func(t *testing.T) {
+		// Create test data with all fields populated
+		commentID := int64(3852786623)
+		nodeID := "IC_kwDOOSQ-Qs7lpNu_"
+		body := "Test comment body"
+		login := "qodo-merge-pro"
+		userID := int64(123456)
+		avatarURL := "https://avatars.githubusercontent.com/u/123456?v=4"
+		createdAt := github.Timestamp{Time: time.Date(2025, 2, 5, 10, 30, 0, 0, time.UTC)}
+		updatedAt := github.Timestamp{Time: time.Date(2025, 2, 5, 10, 35, 0, 0, time.UTC)}
+		authorAssociation := "NONE"
+
+		githubComments := []*github.IssueComment{
+			{
+				ID:      &commentID,
+				NodeID:  &nodeID,
+				Body:    &body,
+				User: &github.User{
+					Login:     &login,
+					ID:        &userID,
+					AvatarURL: &avatarURL,
+				},
+				Reactions: &github.Reactions{
+					PlusOne:    github.Int(5),
+					MinusOne:   github.Int(1),
+					Laugh:      github.Int(2),
+					Confused:   github.Int(0),
+					Heart:      github.Int(3),
+					Hooray:     github.Int(1),
+					Rocket:     github.Int(4),
+					Eyes:       github.Int(2),
+					TotalCount: github.Int(18),
+				},
+				CreatedAt:         &createdAt,
+				UpdatedAt:         &updatedAt,
+				AuthorAssociation: &authorAssociation,
+			},
+		}
+
+		result, err := mapGitHubIssuesCommentToCommentInfoList(githubComments)
+
+		assert.NoError(t, err)
+		assert.Len(t, result, 1)
+
+		comment := result[0]
+		assert.Equal(t, int64(3852786623), comment.ID)
+		assert.Equal(t, "Test comment body", comment.Content)
+		assert.Equal(t, time.Date(2025, 2, 5, 10, 30, 0, 0, time.UTC), comment.Created)
+
+		// Verify author information
+		assert.Equal(t, "qodo-merge-pro", comment.Author.Login)
+		assert.Equal(t, int64(123456), comment.Author.ID)
+		assert.Equal(t, "https://avatars.githubusercontent.com/u/123456?v=4", comment.Author.AvatarURL)
+
+		// Verify reactions
+		assert.Equal(t, 5, comment.Reactions.PlusOne)
+		assert.Equal(t, 1, comment.Reactions.MinusOne)
+		assert.Equal(t, 2, comment.Reactions.Laugh)
+		assert.Equal(t, 0, comment.Reactions.Confused)
+		assert.Equal(t, 3, comment.Reactions.Heart)
+		assert.Equal(t, 1, comment.Reactions.Hooray)
+		assert.Equal(t, 4, comment.Reactions.Rocket)
+		assert.Equal(t, 2, comment.Reactions.Eyes)
+		assert.Equal(t, 18, comment.Reactions.TotalCount)
+
+		// Verify author association
+		assert.Equal(t, "NONE", comment.AuthorAssociation)
+
+		// Verify URL
+		assert.Equal(t, "", comment.URL) // Empty because we didn't set HTMLURL in test data
+	})
+
+	t.Run("Handles nil user gracefully", func(t *testing.T) {
+		commentID := int64(123)
+		body := "Comment without user"
+		createdAt := github.Timestamp{Time: time.Date(2025, 2, 5, 10, 30, 0, 0, time.UTC)}
+
+		githubComments := []*github.IssueComment{
+			{
+				ID:        &commentID,
+				Body:      &body,
+				User:      nil, // No user
+				CreatedAt: &createdAt,
+			},
+		}
+
+		result, err := mapGitHubIssuesCommentToCommentInfoList(githubComments)
+
+		assert.NoError(t, err)
+		assert.Len(t, result, 1)
+
+		// Author should be empty but not cause panic
+		assert.Equal(t, "", result[0].Author.Login)
+		assert.Equal(t, int64(0), result[0].Author.ID)
+		assert.Equal(t, "", result[0].Author.AvatarURL)
+	})
+
+	t.Run("Handles nil reactions gracefully", func(t *testing.T) {
+		commentID := int64(456)
+		body := "Comment without reactions"
+		login := "testuser"
+		createdAt := github.Timestamp{Time: time.Date(2025, 2, 5, 10, 30, 0, 0, time.UTC)}
+
+		githubComments := []*github.IssueComment{
+			{
+				ID:   &commentID,
+				Body: &body,
+				User: &github.User{
+					Login: &login,
+				},
+				Reactions: nil, // No reactions
+				CreatedAt: &createdAt,
+			},
+		}
+
+		result, err := mapGitHubIssuesCommentToCommentInfoList(githubComments)
+
+		assert.NoError(t, err)
+		assert.Len(t, result, 1)
+
+		// Reactions should be zero but not cause panic
+		assert.Equal(t, 0, result[0].Reactions.TotalCount)
+		assert.Equal(t, 0, result[0].Reactions.PlusOne)
+		assert.Equal(t, 0, result[0].Reactions.Heart)
+	})
+
+	t.Run("Maps multiple comments correctly", func(t *testing.T) {
+		comment1ID := int64(1)
+		comment1Body := "First comment"
+		comment2ID := int64(2)
+		comment2Body := "Second comment"
+		login1 := "user1"
+		login2 := "user2"
+		createdAt := github.Timestamp{Time: time.Date(2025, 2, 5, 10, 30, 0, 0, time.UTC)}
+
+		githubComments := []*github.IssueComment{
+			{
+				ID:   &comment1ID,
+				Body: &comment1Body,
+				User: &github.User{Login: &login1},
+				Reactions: &github.Reactions{
+					PlusOne:    github.Int(5),
+					TotalCount: github.Int(5),
+				},
+				CreatedAt: &createdAt,
+			},
+			{
+				ID:   &comment2ID,
+				Body: &comment2Body,
+				User: &github.User{Login: &login2},
+				Reactions: &github.Reactions{
+					Heart:      github.Int(3),
+					TotalCount: github.Int(3),
+				},
+				CreatedAt: &createdAt,
+			},
+		}
+
+		result, err := mapGitHubIssuesCommentToCommentInfoList(githubComments)
+
+		assert.NoError(t, err)
+		assert.Len(t, result, 2)
+
+		assert.Equal(t, int64(1), result[0].ID)
+		assert.Equal(t, "First comment", result[0].Content)
+		assert.Equal(t, "user1", result[0].Author.Login)
+		assert.Equal(t, 5, result[0].Reactions.PlusOne)
+
+		assert.Equal(t, int64(2), result[1].ID)
+		assert.Equal(t, "Second comment", result[1].Content)
+		assert.Equal(t, "user2", result[1].Author.Login)
+		assert.Equal(t, 3, result[1].Reactions.Heart)
 	})
 }

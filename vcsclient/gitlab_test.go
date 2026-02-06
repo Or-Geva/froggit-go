@@ -270,6 +270,12 @@ func TestGitLabClient_ListPullRequestComments(t *testing.T) {
 		ID:      305,
 		Content: "Text of the comment\r\n",
 		Created: expectedCreated,
+		Author: UserInfo{
+			Login: "pipin",
+			ID:    1,
+			Name:  "Pip",
+			Email: "admin@example.com",
+		},
 	}, result[1])
 }
 

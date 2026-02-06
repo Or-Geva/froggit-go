@@ -36,7 +36,18 @@
     "updated_at": "2011-04-14T16:00:49Z",
     "html_url": "https://github.com/octocat/Hello-World/pull/1#discussion-diff-1",
     "pull_request_url": "https://api.github.com/repos/octocat/Hello-World/pulls/1",
-    "author_association": "NONE",
+    "author_association": "CONTRIBUTOR",
+    "reactions": {
+      "+1": 5,
+      "-1": 0,
+      "laugh": 2,
+      "confused": 0,
+      "heart": 3,
+      "hooray": 1,
+      "rocket": 4,
+      "eyes": 2,
+      "total_count": 17
+    },
     "_links": {
       "self": {
         "href": "https://api.github.com/repos/octocat/Hello-World/pulls/comments/1"
@@ -92,7 +103,18 @@
     "updated_at": "2011-04-14T16:01:49Z",
     "html_url": "https://github.com/octocat/Hello-World/pull/1#discussion-diff-1",
     "pull_request_url": "https://api.github.com/repos/octocat/Hello-World/pulls/1",
-    "author_association": "NONE",
+    "author_association": "MEMBER",
+    "reactions": {
+      "+1": 10,
+      "-1": 1,
+      "laugh": 0,
+      "confused": 0,
+      "heart": 0,
+      "hooray": 0,
+      "rocket": 0,
+      "eyes": 1,
+      "total_count": 12
+    },
     "_links": {
       "self": {
         "href": "https://api.github.com/repos/octocat/Hello-World/pulls/comments/1"

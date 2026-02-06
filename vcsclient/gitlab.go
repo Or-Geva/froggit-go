@@ -778,6 +778,7 @@ func (client *GitLabClient) ListPullRequestReviews(ctx context.Context, owner, r
 			Body:        review.Body,
 			SubmittedAt: review.CreatedAt.Format(time.RFC3339),
 			CommitID:    review.CommitID,
+			URL:         "", // GitLab notes don't have a direct HTML URL
 		})
 	}
 
@@ -902,11 +903,24 @@ func mapGitLabCommitToCommitInfo(commit *gitlab.Commit) CommitInfo {
 
 func mapGitLabNotesToCommentInfoList(notes []*gitlab.Note, discussionId string) (res []CommentInfo) {
 	for _, note := range notes {
+		author := UserInfo{
+			Login:     note.Author.Username,
+			ID:        int64(note.Author.ID),
+			Name:      note.Author.Name,
+			Email:     note.Author.Email,
+			AvatarURL: note.Author.AvatarURL,
+		}
+
 		res = append(res, CommentInfo{
 			ID:       int64(note.ID),
 			ThreadID: discussionId,
 			Content:  note.Body,
 			Created:  *note.CreatedAt,
+			Author:   author,
+			// GitLab doesn't have reactions or author association in the same way as GitHub
+			Reactions:         ReactionInfo{},
+			AuthorAssociation: "",
+			URL:               "", // GitLab notes don't have a direct HTML URL in the API response
 		})
 	}
 	return

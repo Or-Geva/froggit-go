@@ -648,6 +648,8 @@ err := client.AddPullRequestReviewComments(ctx, owner, repository, pullRequestID
 
 ##### List Pull Request Comments
 
+Returns detailed information about each comment including author details, reactions, and metadata.
+
 ```go
 // Go context
 ctx := context.Background()
@@ -658,8 +660,82 @@ repository := "jfrog-cli"
 // Pull Request ID
 pullRequestID := 5
 
+// List all comments on the pull request
 pullRequestComments, err := client.ListPullRequestComment(ctx, owner, repository, pullRequestID)
+if err != nil {
+    // handle error
+}
+
+// Each comment includes rich metadata
+for _, comment := range pullRequestComments {
+    fmt.Printf("Comment ID: %d\n", comment.ID)
+    fmt.Printf("Content: %s\n", comment.Content)
+    fmt.Printf("Created: %s\n", comment.Created)
+
+    // Author information
+    fmt.Printf("Author: %s (ID: %d)\n", comment.Author.Login, comment.Author.ID)
+    fmt.Printf("Avatar: %s\n", comment.Author.AvatarURL)
+    fmt.Printf("Author Association: %s\n", comment.AuthorAssociation)
+
+    // Reaction counts (GitHub)
+    if comment.Reactions.TotalCount > 0 {
+        fmt.Printf("Total Reactions: %d\n", comment.Reactions.TotalCount)
+        if comment.Reactions.PlusOne > 0 {
+            fmt.Printf("  👍 +1: %d\n", comment.Reactions.PlusOne)
+        }
+        if comment.Reactions.Heart > 0 {
+            fmt.Printf("  ❤️ Heart: %d\n", comment.Reactions.Heart)
+        }
+        if comment.Reactions.Rocket > 0 {
+            fmt.Printf("  🚀 Rocket: %d\n", comment.Reactions.Rocket)
+        }
+        // Other reactions: MinusOne, Laugh, Confused, Hooray, Eyes
+    }
+}
 ```
+
+**Comment Structure:**
+
+The `CommentInfo` struct provides comprehensive comment metadata:
+
+```go
+type CommentInfo struct {
+    ID                int64           // Unique comment identifier
+    ThreadID          string          // Thread identifier (for GitLab)
+    Content           string          // Comment body/content
+    Created           time.Time       // Comment creation timestamp
+    Version           int             // Comment version (for platforms that support versioning)
+    Author            UserInfo        // Complete author information
+    Reactions         ReactionInfo    // Reaction counts (GitHub)
+    AuthorAssociation string          // Author's relationship to repository (e.g., "OWNER", "CONTRIBUTOR", "MEMBER", "NONE")
+}
+
+type UserInfo struct {
+    Login     string  // Username
+    ID        int64   // User ID
+    Name      string  // Display name
+    Email     string  // Email address
+    AvatarURL string  // Avatar image URL
+}
+
+type ReactionInfo struct {
+    PlusOne    int  // 👍 reactions
+    MinusOne   int  // 👎 reactions
+    Laugh      int  // 😄 reactions
+    Confused   int  // 😕 reactions
+    Heart      int  // ❤️ reactions
+    Hooray     int  // 🎉 reactions
+    Rocket     int  // 🚀 reactions
+    Eyes       int  // 👀 reactions
+    TotalCount int  // Total reaction count
+}
+```
+
+**Notes:**
+- Reaction data is currently available for GitHub only
+- `AuthorAssociation` indicates the author's relationship: `OWNER`, `MEMBER`, `CONTRIBUTOR`, `COLLABORATOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE`
+- `AvatarURL` provides a direct link to the user's profile image
+- All fields are safely populated with nil-checks to prevent panics
 
 ##### List Pull Request Review Comments
 
