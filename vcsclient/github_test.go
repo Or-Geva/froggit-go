@@ -765,9 +765,36 @@ func TestGitHubClient_ListPullRequestComments(t *testing.T) {
 
 	result, err := client.ListPullRequestComments(ctx, owner, repo1, 1)
 	assert.NoError(t, err)
-	assert.Len(t, result, 2)
+	assert.Len(t, result, 3)
 
-	// Test first comment with all enriched fields
+	// Test first comment (comment 8)
+	expectedCreated0, err := time.Parse(time.RFC3339, "2011-04-14T15:59:49Z")
+	assert.NoError(t, err)
+	assert.Equal(t, CommentInfo{
+		ID:      8,
+		Content: "Please change this line",
+		Created: expectedCreated0,
+		Author: UserInfo{
+			Login:     "octocat",
+			ID:        1,
+			AvatarURL: "https://github.com/images/error/octocat_happy.gif",
+		},
+		Reactions: ReactionInfo{
+			PlusOne:    3,
+			MinusOne:   0,
+			Laugh:      0,
+			Confused:   0,
+			Heart:      1,
+			Hooray:     0,
+			Rocket:     0,
+			Eyes:       0,
+			TotalCount: 4,
+		},
+		AuthorAssociation: "COLLABORATOR",
+		URL:               "https://github.com/octocat/Hello-World/pull/1#discussion-diff-1",
+	}, result[0])
+
+	// Test second comment (comment 10) with all enriched fields
 	expectedCreated, err := time.Parse(time.RFC3339, "2011-04-14T16:00:49Z")
 	assert.NoError(t, err)
 	assert.Equal(t, CommentInfo{
@@ -792,9 +819,9 @@ func TestGitHubClient_ListPullRequestComments(t *testing.T) {
 		},
 		AuthorAssociation: "CONTRIBUTOR",
 		URL:               "https://github.com/octocat/Hello-World/pull/1#discussion-diff-1",
-	}, result[0])
+	}, result[1])
 
-	// Test second comment
+	// Test third comment (comment 11)
 	expectedCreated2, err := time.Parse(time.RFC3339, "2011-04-14T16:01:49Z")
 	assert.NoError(t, err)
 	assert.Equal(t, CommentInfo{
@@ -819,7 +846,7 @@ func TestGitHubClient_ListPullRequestComments(t *testing.T) {
 		},
 		AuthorAssociation: "MEMBER",
 		URL:               "https://github.com/octocat/Hello-World/pull/1#discussion-diff-1",
-	}, result[1])
+	}, result[2])
 
 	_, err = createBadGitHubClient(t).ListPullRequestComments(ctx, owner, repo1, 1)
 	assert.Error(t, err)
@@ -827,45 +854,204 @@ func TestGitHubClient_ListPullRequestComments(t *testing.T) {
 
 func TestGitHubClient_ListPullRequestReviews(t *testing.T) {
 	ctx := context.Background()
-	response, err := os.ReadFile(filepath.Join("testdata", "github", "pull_request_reviews_response.json"))
+	reviewsResponse, err := os.ReadFile(filepath.Join("testdata", "github", "pull_request_reviews_response.json"))
+	assert.NoError(t, err)
+	commentsResponse, err := os.ReadFile(filepath.Join("testdata", "github", "pull_request_comments_list_response.json"))
 	assert.NoError(t, err)
 
-	// Create a handler that returns reviews for /reviews and empty array for /comments
+	// Create a handler that returns reviews for /reviews and comments for /comments
 	handler := func(t *testing.T, expectedURI string, response []byte, expectedStatusCode int) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
 			w.WriteHeader(http.StatusOK)
 
-			// Return empty array for comments endpoint, reviews response for reviews endpoint
+			// Return comments for comments endpoint, reviews response for reviews endpoint
 			if strings.Contains(r.RequestURI, "/comments") {
-				_, err := w.Write([]byte("[]"))
+				_, err := w.Write(commentsResponse)
 				assert.NoError(t, err)
 			} else {
-				_, err := w.Write(response)
+				_, err := w.Write(reviewsResponse)
 				assert.NoError(t, err)
 			}
 		}
 	}
 
-	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, response,
+	client, cleanUp := createServerAndClient(t, vcsutils.GitHub, false, reviewsResponse,
 		fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo1, 1), handler)
 	defer cleanUp()
 
 	result, err := client.ListPullRequestReviews(ctx, owner, repo1, 1)
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
-	assert.Equal(t, PullRequestReviewDetails{
-		ID:          80,
-		Reviewer:    "octocat",
-		Body:        "This is close to perfect! Please address the suggested inline change.",
-		SubmittedAt: "2019-11-17 17:43:43 +0000 UTC",
-		CommitID:    "ecdd80bb57125d7ba9641ffaa4d7d2c19d3f3091",
-		State:       "CHANGES_REQUESTED",
-		URL:         "https://github.com/octocat/Hello-World/pull/12#pullrequestreview-80",
-	}, result[0])
+
+	review := result[0]
+	assert.Equal(t, int64(80), review.ID)
+	assert.Equal(t, "octocat", review.Reviewer)
+	assert.Equal(t, "This is close to perfect! Please address the suggested inline change.", review.Body)
+	assert.Equal(t, "2019-11-17 17:43:43 +0000 UTC", review.SubmittedAt)
+	assert.Equal(t, "ecdd80bb57125d7ba9641ffaa4d7d2c19d3f3091", review.CommitID)
+	assert.Equal(t, "CHANGES_REQUESTED", review.State)
+	assert.Equal(t, "https://github.com/octocat/Hello-World/pull/12#pullrequestreview-80", review.URL)
+
+	// Verify comment threading structure
+	assert.Len(t, review.Comments, 1, "Should have 1 top-level comment")
+
+	topComment := review.Comments[0]
+	assert.Equal(t, int64(8), topComment.ID)
+	assert.Equal(t, "Please change this line", topComment.Body)
+
+	// Verify nested replies
+	assert.Len(t, topComment.Replies, 2, "Top comment should have 2 replies")
+	assert.Equal(t, int64(10), topComment.Replies[0].ID)
+	assert.Equal(t, "Great stuff!", topComment.Replies[0].Body)
+	assert.Equal(t, int64(11), topComment.Replies[1].ID)
+	assert.Equal(t, "LGTM", topComment.Replies[1].Body)
 
 	_, err = createBadGitHubClient(t).ListPullRequestReviews(ctx, owner, repo1, 1)
 	assert.Error(t, err)
+}
+
+func Test_buildCommentTree(t *testing.T) {
+	// Create test data matching real GitHub API structure
+	// Comment 2596145207: "Add tests" (top-level in review 3549152072)
+	// Comment 2774105374: "What tests?" (reply to 2596145207, in review 3763045344)
+	// Comment 2589522524: "hi" (top-level in review 3540578773)
+
+	comment1ID := int64(2589522524)
+	comment1ReviewID := int64(3540578773)
+	comment2ID := int64(2596145207)
+	comment2ReviewID := int64(3549152072)
+	comment3ID := int64(2774105374)
+	comment3ReviewID := int64(3763045344)
+	comment3InReplyTo := comment2ID
+
+	timestamp := github.Timestamp{Time: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+
+	allComments := []*github.PullRequestComment{
+		{
+			ID:                   &comment1ID,
+			Body:                 github.String("hi"),
+			Path:                 github.String("LICENSE"),
+			Line:                 github.Int(9),
+			Side:                 github.String("RIGHT"),
+			PullRequestReviewID:  &comment1ReviewID,
+			CreatedAt:            &timestamp,
+			DiffHunk:             github.String("@@ -6,6+6,8 @@"),
+			StartLine:            nil,
+			InReplyTo:            nil,
+			User: &github.User{
+				Login:     github.String("user1"),
+				AvatarURL: github.String("https://avatars.githubusercontent.com/u/1"),
+			},
+			HTMLURL: github.String("https://github.com/repo/pull/1#discussion_r1"),
+		},
+		{
+			ID:                   &comment2ID,
+			Body:                 github.String("Add tests"),
+			Path:                 github.String("LICENSE"),
+			Line:                 github.Int(203),
+			Side:                 github.String("RIGHT"),
+			PullRequestReviewID:  &comment2ReviewID,
+			CreatedAt:            &timestamp,
+			DiffHunk:             github.String("@@ -198,4 +200,4 @@"),
+			StartLine:            nil,
+			InReplyTo:            nil,
+			User: &github.User{
+				Login:     github.String("user2"),
+				AvatarURL: github.String("https://avatars.githubusercontent.com/u/2"),
+			},
+			HTMLURL: github.String("https://github.com/repo/pull/1#discussion_r2"),
+		},
+		{
+			ID:                   &comment3ID,
+			Body:                 github.String("What tests?"),
+			Path:                 github.String("LICENSE"),
+			Line:                 github.Int(203),
+			Side:                 github.String("RIGHT"),
+			PullRequestReviewID:  &comment3ReviewID,
+			CreatedAt:            &timestamp,
+			DiffHunk:             github.String("@@ -198,4 +200,4 @@"),
+			StartLine:            nil,
+			InReplyTo:            &comment3InReplyTo, // Reply to comment2
+			User: &github.User{
+				Login:     github.String("user3"),
+				AvatarURL: github.String("https://avatars.githubusercontent.com/u/3"),
+			},
+			HTMLURL: github.String("https://github.com/repo/pull/1#discussion_r3"),
+		},
+	}
+
+	// Build the comment tree
+	commentsByReviewID, globalCommentMap := buildCommentTree(allComments)
+
+	// Verify commentsByReviewID grouping
+	assert.Len(t, commentsByReviewID, 3, "Should have 3 reviews")
+	assert.Len(t, commentsByReviewID[comment1ReviewID], 1, "Review 1 should have 1 comment")
+	assert.Len(t, commentsByReviewID[comment2ReviewID], 1, "Review 2 should have 1 comment")
+	assert.Len(t, commentsByReviewID[comment3ReviewID], 1, "Review 3 should have 1 comment")
+
+	// Verify global comment map contains only top-level comments
+	assert.Len(t, globalCommentMap, 2, "Should have 2 top-level comments in global map (comment 3 is a reply)")
+
+	// Verify comment 1 (standalone top-level comment)
+	comment1Detail := globalCommentMap[comment1ID]
+	assert.NotNil(t, comment1Detail)
+	assert.Equal(t, comment1ID, comment1Detail.ID)
+	assert.Equal(t, "hi", comment1Detail.Body)
+	assert.Equal(t, "LICENSE", comment1Detail.Path)
+	assert.Len(t, comment1Detail.Replies, 0, "Comment 1 should have no replies")
+
+	// Verify comment 2 (parent comment with reply)
+	comment2Detail := globalCommentMap[comment2ID]
+	assert.NotNil(t, comment2Detail)
+	assert.Equal(t, comment2ID, comment2Detail.ID)
+	assert.Equal(t, "Add tests", comment2Detail.Body)
+	assert.Len(t, comment2Detail.Replies, 1, "Comment 2 should have 1 reply")
+
+	// Verify comment 3 is nested under comment 2 as a PullRequestReviewDetails
+	reply := comment2Detail.Replies[0]
+	assert.Equal(t, comment3ID, reply.ID)
+	assert.Equal(t, "What tests?", reply.Body)
+	assert.Equal(t, "user3", reply.Reviewer, "Reply should have reviewer information")
+	assert.Equal(t, "https://github.com/repo/pull/1#discussion_r3", reply.URL, "Reply should have URL")
+	assert.Len(t, reply.Comments, 1, "Reply should have 1 comment in Comments array")
+	assert.Equal(t, comment3ID, reply.Comments[0].ID, "Reply's comment should match the reply ID")
+	assert.Equal(t, "What tests?", reply.Comments[0].Body, "Reply's comment body should match")
+
+	// Verify comment 3 is NOT in global map (it's a reply, should only exist nested)
+	comment3Detail := globalCommentMap[comment3ID]
+	assert.Nil(t, comment3Detail, "Comment 3 should NOT be in global map since it's a reply")
+
+	// Verify only top-level comments are in global map
+	assert.Len(t, globalCommentMap, 2, "Global map should only have 2 top-level comments (1 and 2)")
+	assert.NotNil(t, globalCommentMap[comment1ID], "Comment 1 should be in global map")
+	assert.NotNil(t, globalCommentMap[comment2ID], "Comment 2 should be in global map")
+
+	// Test that reply comments don't appear in their review's top-level comments
+	// Simulate building reviewDetails for review 3 (which contains comment 3, a reply)
+	review3Comments := commentsByReviewID[comment3ReviewID]
+	var review3TopLevel []ReviewCommentDetails
+	for _, comment := range review3Comments {
+		if comment.GetInReplyTo() == 0 {
+			detail := globalCommentMap[comment.GetID()]
+			review3TopLevel = append(review3TopLevel, *detail)
+		}
+	}
+	// Comment 3 is a reply, so it should NOT be in top-level comments for review 3
+	assert.Len(t, review3TopLevel, 0, "Review 3 should have 0 top-level comments (comment 3 is a reply)")
+
+	// Similarly for review 2 - it should only have comment 2 (the parent)
+	review2Comments := commentsByReviewID[comment2ReviewID]
+	var review2TopLevel []ReviewCommentDetails
+	for _, comment := range review2Comments {
+		if comment.GetInReplyTo() == 0 {
+			detail := globalCommentMap[comment.GetID()]
+			review2TopLevel = append(review2TopLevel, *detail)
+		}
+	}
+	assert.Len(t, review2TopLevel, 1, "Review 2 should have 1 top-level comment")
+	assert.Equal(t, comment2ID, review2TopLevel[0].ID, "Review 2's top-level comment should be comment 2")
+	assert.Len(t, review2TopLevel[0].Replies, 1, "Comment 2 should have 1 reply")
 }
 
 func TestGitHubClient_ListPullRequestsAssociatedWithCommit(t *testing.T) {

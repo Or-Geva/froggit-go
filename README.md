@@ -315,6 +315,8 @@ repositoryBranches, err := client.ListBranches(ctx, owner, repository)
 
 #### List Pull Request Reviews
 
+Returns detailed information about pull request reviews including review comments with nested reply support (GitHub only).
+
 ```go
 // Go context
 ctx := context.Background()
@@ -327,6 +329,94 @@ pullRequestID := 1
 
 // List all reviews for pull request 1
 reviews, err := client.ListPullRequestReviews(ctx, owner, repository, pullRequestID)
+if err != nil {
+    // handle error
+}
+
+// Each review contains review-level details and inline comments
+for _, review := range reviews {
+    fmt.Printf("Review ID: %d\n", review.ID)
+    fmt.Printf("Reviewer: %s\n", review.Reviewer)
+    fmt.Printf("State: %s\n", review.State)
+    fmt.Printf("Body: %s\n", review.Body)
+
+    // Top-level comments (comments that are not replies)
+    for _, comment := range review.Comments {
+        fmt.Printf("  Comment ID: %d\n", comment.ID)
+        fmt.Printf("  Author: %s\n", comment.Author)
+        fmt.Printf("  Body: %s\n", comment.Body)
+        fmt.Printf("  File: %s:%d\n", comment.Path, comment.Line)
+        fmt.Printf("  URL: %s\n", comment.URL)
+
+        // Nested replies to this comment
+        for _, reply := range comment.Replies {
+            fmt.Printf("    Reply ID: %d by %s\n", reply.ID, reply.Author)
+            fmt.Printf("    Body: %s\n", reply.Body)
+            fmt.Printf("    Avatar: %s\n", reply.AvatarURL)
+        }
+    }
+}
+```
+
+**Review Comment Structure:**
+
+The `PullRequestReviewDetails` struct provides comprehensive review information:
+
+```go
+type PullRequestReviewDetails struct {
+    ID          int64                    // Review ID
+    Reviewer    string                   // Reviewer username
+    Body        string                   // Review body text
+    SubmittedAt string                   // Submission timestamp
+    CommitID    string                   // Associated commit SHA
+    State       string                   // Review state (APPROVED, CHANGES_REQUESTED, COMMENTED, etc.)
+    Comments    []ReviewCommentDetails   // Top-level inline review comments
+    URL         string                   // HTML URL to the review
+}
+
+type ReviewCommentDetails struct {
+    ID        int64                          // Comment ID
+    Body      string                         // Comment content
+    DiffHunk  string                         // Diff context
+    Path      string                         // File path
+    Line      int                            // Current line number
+    StartLine int                            // Start line for multi-line comments
+    Side      string                         // "LEFT" or "RIGHT" side of the diff
+    CreatedAt time.Time                      // Creation timestamp
+    Replies   []PullRequestReviewDetails     // Nested replies to this comment (GitHub only)
+}
+```
+
+**Important Notes on Nested Replies:**
+
+- **GitHub**: Supports full nested reply structure. When a reviewer replies to another comment, it appears in the `Replies` array of the parent comment as a `PullRequestReviewDetails` object containing the reply metadata (reviewer, URL, timestamp) and the comment details.
+- **Other VCS providers** (GitLab, Bitbucket, Azure Repos): The `Replies` field will be empty as nested review comment replies are currently only implemented for GitHub.
+- Comments are organized hierarchically: only top-level comments appear in `Comments`, while replies are nested in the parent comment's `Replies` array.
+- To traverse all comments including replies, use recursive iteration as shown in the example above.
+
+**Example: Processing all comments recursively**
+
+```go
+func processComment(comment ReviewCommentDetails, depth int) {
+    indent := strings.Repeat("  ", depth)
+    fmt.Printf("%sComment ID: %d, Body: %s\n", indent, comment.ID, comment.Body)
+
+    // Process nested replies (each reply is a PullRequestReviewDetails)
+    for _, reply := range comment.Replies {
+        fmt.Printf("%s  Reply by %s: %s\n", indent, reply.Reviewer, reply.Body)
+        // Process the comment details within the reply
+        for _, replyComment := range reply.Comments {
+            processComment(replyComment, depth+2)
+        }
+    }
+}
+
+// Process all comments in a review
+for _, review := range reviews {
+    for _, comment := range review.Comments {
+        processComment(comment, 0)
+    }
+}
 ```
 
 #### Download Repository

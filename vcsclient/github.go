@@ -695,6 +695,80 @@ func (client *GitHubClient) ListPullRequestReviewComments(ctx context.Context, o
 	return commentsInfoList, err
 }
 
+// buildCommentTree creates a nested comment structure from GitHub pull request comments.
+// It builds a global map of only top-level comments and links replies to their parent comments,
+// allowing replies to reference parents even across different reviews.
+// Reply comments are removed from the global map after being nested under their parents.
+func buildCommentTree(allComments []*github.PullRequestComment) (commentsByReviewID map[int64][]*github.PullRequestComment, globalCommentMap map[int64]*ReviewCommentDetails) {
+	// Group comments by review ID
+	commentsByReviewID = make(map[int64][]*github.PullRequestComment)
+	for _, comment := range allComments {
+		if comment.GetPullRequestReviewID() != 0 {
+			reviewID := comment.GetPullRequestReviewID()
+			commentsByReviewID[reviewID] = append(commentsByReviewID[reviewID], comment)
+		}
+	}
+
+	// Build a temporary map for ALL comments (both top-level and replies)
+	tempCommentMap := make(map[int64]*ReviewCommentDetails)
+	for _, comment := range allComments {
+		if comment.GetPullRequestReviewID() != 0 {
+			detail := &ReviewCommentDetails{
+				ID:        comment.GetID(),
+				Body:      comment.GetBody(),
+				DiffHunk:  comment.GetDiffHunk(),
+				Path:      comment.GetPath(),
+				Line:      comment.GetLine(),
+				StartLine: comment.GetStartLine(),
+				Side:      comment.GetSide(),
+				CreatedAt: comment.GetCreatedAt().Time,
+				Replies:   []PullRequestReviewDetails{},
+			}
+			tempCommentMap[comment.GetID()] = detail
+		}
+	}
+
+	// Link replies to parents and track which comments are replies
+	replyIDs := make(map[int64]bool)
+	for _, comment := range allComments {
+		if comment.GetPullRequestReviewID() != 0 && comment.GetInReplyTo() != 0 {
+			inReplyToID := comment.GetInReplyTo()
+			if parent, exists := tempCommentMap[inReplyToID]; exists {
+				// Create a PullRequestReviewDetails for the reply
+				reviewer := ""
+				if comment.User != nil {
+					reviewer = comment.GetUser().GetLogin()
+				}
+
+				replyDetail := PullRequestReviewDetails{
+					ID:          comment.GetID(),
+					Reviewer:    reviewer,
+					Body:        comment.GetBody(),
+					SubmittedAt: comment.GetCreatedAt().Time.Format(time.RFC3339),
+					CommitID:    comment.GetCommitID(),
+					State:       "", // Comment replies don't have state
+					URL:         comment.GetHTMLURL(),
+					Comments: []ReviewCommentDetails{
+						*tempCommentMap[comment.GetID()],
+					},
+				}
+				parent.Replies = append(parent.Replies, replyDetail)
+				replyIDs[comment.GetID()] = true
+			}
+		}
+	}
+
+	// Build global map with only top-level comments (exclude replies)
+	globalCommentMap = make(map[int64]*ReviewCommentDetails)
+	for id, detail := range tempCommentMap {
+		if !replyIDs[id] {
+			globalCommentMap[id] = detail
+		}
+	}
+
+	return commentsByReviewID, globalCommentMap
+}
+
 // ListPullRequestReviews on GitHub
 func (client *GitHubClient) ListPullRequestReviews(ctx context.Context, owner, repository string, pullRequestID int) ([]PullRequestReviewDetails, error) {
 	err := validateParametersNotBlank(map[string]string{"owner": owner, "repository": repository})
@@ -750,14 +824,8 @@ func (client *GitHubClient) ListPullRequestReviews(ctx context.Context, owner, r
 		commentOpts.Page = resp.NextPage
 	}
 
-	// Group comments by review ID
-	commentsByReviewID := make(map[int64][]*github.PullRequestComment)
-	for _, comment := range allComments {
-		if comment.GetPullRequestReviewID() != 0 {
-			reviewID := comment.GetPullRequestReviewID()
-			commentsByReviewID[reviewID] = append(commentsByReviewID[reviewID], comment)
-		}
-	}
+	// Build comment tree with nested replies
+	commentsByReviewID, globalCommentMap := buildCommentTree(allComments)
 
 	var reviewInfos []PullRequestReviewDetails
 	for _, review := range reviews {
@@ -771,29 +839,17 @@ func (client *GitHubClient) ListPullRequestReviews(ctx context.Context, owner, r
 			URL:         review.GetHTMLURL(),
 		}
 
-		// Add associated review comments with diff context
+		// Add associated review comments with diff context and nested replies
 		if comments, ok := commentsByReviewID[review.GetID()]; ok {
+			var topLevelComments []ReviewCommentDetails
 			for _, comment := range comments {
-				// Check if comment is outdated (GitHub sets this when code has changed)
-				isOutdated := false
-				if comment.Line != nil && comment.OriginalLine != nil {
-					// If line numbers differ, the comment is outdated
-					isOutdated = *comment.Line != *comment.OriginalLine
+				// Only include top-level comments (those not replying to others)
+				if comment.GetInReplyTo() == 0 {
+					detail := globalCommentMap[comment.GetID()]
+					topLevelComments = append(topLevelComments, *detail)
 				}
-
-				reviewCommentDetail := ReviewCommentDetails{
-					ID:        comment.GetID(),
-					Body:      comment.GetBody(),
-					DiffHunk:  comment.GetDiffHunk(),
-					Path:      comment.GetPath(),
-					Line:      comment.GetLine(),
-					StartLine: comment.GetStartLine(),
-					Side:      comment.GetSide(),
-					CreatedAt: comment.GetCreatedAt().Time,
-					Outdated:  isOutdated,
-				}
-				reviewDetails.Comments = append(reviewDetails.Comments, reviewCommentDetail)
 			}
+			reviewDetails.Comments = topLevelComments
 		}
 
 		reviewInfos = append(reviewInfos, reviewDetails)

@@ -555,7 +555,7 @@ type ReviewCommentDetails struct {
 	StartLine int
 	Side      string
 	CreatedAt time.Time
-	Outdated  bool // Whether the comment is outdated/resolved
+	Replies   []PullRequestReviewDetails // Nested replies to this comment
 }
 
 type BranchInfo struct {
